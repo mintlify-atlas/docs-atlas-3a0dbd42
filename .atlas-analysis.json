@@ -1,0 +1,104 @@
+{
+  "projectType": "framework",
+  "projectName": "DBHub",
+  "projectDescription": "Zero-dependency, token-efficient MCP server bridging AI clients with PostgreSQL, MySQL, SQL Server, MariaDB, and SQLite databases",
+  "theme": "aspen",
+  "primaryColor": "#eecc3a",
+  "lightColor": "#7e620c",
+  "darkColor": "#222739",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "config/command-line",
+              "config/environment",
+              "config/toml",
+              "config/debug"
+            ]
+          },
+          {
+            "group": "Database Connectors",
+            "pages": [
+              "connectors/overview",
+              "connectors/postgresql",
+              "connectors/mysql",
+              "connectors/mariadb",
+              "connectors/sqlserver",
+              "connectors/sqlite",
+              "connectors/ssh-tunnels"
+            ]
+          },
+          {
+            "group": "MCP Tools",
+            "pages": [
+              "tools/execute-sql",
+              "tools/search-objects",
+              "tools/custom-tools"
+            ]
+          },
+          {
+            "group": "Workbench",
+            "pages": [
+              "workbench/overview",
+              "workbench/usage"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/best-practices",
+              "guides/security",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Development",
+        "groups": [
+          {
+            "group": "Contributing",
+            "pages": [
+              "development/overview",
+              "development/architecture",
+              "development/testing",
+              "development/building-connectors"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Model Context Protocol (MCP) server implementation",
+    "Multi-database support (PostgreSQL, MySQL, MariaDB, SQL Server, SQLite)",
+    "Token-efficient schema exploration with progressive disclosure",
+    "Multi-connection TOML configuration",
+    "SSH tunneling and SSL/TLS encryption",
+    "Built-in web workbench interface",
+    "Read-only mode and query guardrails",
+    "Custom tool definitions for reusable SQL operations"
+  ],
+  "publicApiSurface": [
+    "execute_sql - Execute SQL queries with transaction support",
+    "search_objects - Search database schemas, tables, columns, indexes, procedures",
+    "Custom tools - User-defined parameterized SQL operations",
+    "Connector interface - Extend with new database types",
+    "ConnectorRegistry - Dynamic connector registration",
+    "ConnectorManager - Multi-database connection management",
+    "Transport modes - stdio (desktop) and HTTP (network clients)",
+    "CLI options - --dsn, --transport, --config, --readonly, --demo"
+  ]
+}
