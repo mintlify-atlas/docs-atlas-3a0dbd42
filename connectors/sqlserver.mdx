@@ -1,0 +1,575 @@
+---
+title: SQL Server Connector
+description: Connect DBHub to Microsoft SQL Server databases with support for named instances and Azure AD authentication
+---
+
+The SQL Server connector provides comprehensive support for Microsoft SQL Server, including named instances, NTLM authentication, Azure Active Directory authentication, and full schema introspection.
+
+## DSN Format
+
+SQL Server connection strings use the `sqlserver://` protocol:
+
+```
+sqlserver://[username[:password]@]host[:port]/database[?options]
+```
+
+### Basic Examples
+
+```bash
+# Standard connection
+sqlserver://sa:YourPassword123@localhost:1433/mydb?sslmode=disable
+
+# Named instance
+sqlserver://user:pass@localhost:1433/mydb?instanceName=SQLEXPRESS
+
+# NTLM authentication
+sqlserver://domain_user:pass@server:1433/db?authentication=ntlm&domain=MYDOMAIN
+
+# Azure AD authentication
+sqlserver://user:pass@myserver.database.windows.net:1433/mydb?authentication=azure-active-directory-access-token
+```
+
+## Connection Options
+
+### SSL/TLS Modes
+
+SQL Server supports SSL configuration via the `sslmode` query parameter:
+
+```bash
+# No SSL (development only)
+sqlserver://user:pass@localhost:1433/db?sslmode=disable
+
+# SSL without certificate verification (recommended for most use cases)
+sqlserver://user:pass@host:1433/db?sslmode=require
+
+# SSL with certificate verification (default)
+sqlserver://user:pass@host:1433/db
+```
+
+**Implementation**: See src/connectors/sqlserver/index.ts:66-73
+
+Note: The connector defaults to `encrypt: false` for development convenience. For production, use `sslmode=require`.
+
+### Named Instances
+
+SQL Server supports named instances via the `instanceName` parameter:
+
+```bash
+# Connect to SQLEXPRESS instance
+sqlserver://user:pass@localhost:1433/db?instanceName=SQLEXPRESS
+
+# Connect to custom named instance
+sqlserver://user:pass@server:1433/db?instanceName=INSTANCE1
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:49-50, 90
+
+### Timeouts
+
+Configure connection and query timeouts via TOML:
+
+```toml
+[[sources]]
+id = "sqlserver_db"
+dsn = "sqlserver://user:pass@host:1433/db"
+connection_timeout = 30  # Seconds to establish connection
+query_timeout = 60       # Seconds for query execution
+```
+
+The SQL Server connector converts these to milliseconds for the `mssql` library (src/connectors/sqlserver/index.ts:84-89).
+
+### NTLM Authentication
+
+For Windows domain authentication, use NTLM:
+
+```bash
+sqlserver://domain_user:password@server:1433/db?authentication=ntlm&domain=MYDOMAIN
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:57-62, 112-121
+
+Requirements:
+- `authentication=ntlm` parameter
+- `domain` parameter specifying Windows domain
+- Domain username and password
+
+Validation:
+- NTLM requires `domain` parameter (error if missing)
+- `domain` parameter requires `authentication=ntlm` (error if inconsistent)
+
+### Azure Active Directory Authentication
+
+For Azure SQL Database, use Azure AD authentication:
+
+```bash
+sqlserver://user@domain.com:password@myserver.database.windows.net:1433/mydb?authentication=azure-active-directory-access-token
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:96-110
+
+The connector uses `DefaultAzureCredential` to automatically obtain access tokens from:
+1. Environment variables
+2. Managed Identity (in Azure)
+3. Azure CLI credentials
+4. Visual Studio credentials
+5. Azure PowerShell credentials
+
+## Supported Features
+
+### Schemas
+
+SQL Server has full schema support. List all schemas:
+
+```sql
+SELECT SCHEMA_NAME
+FROM INFORMATION_SCHEMA.SCHEMATA
+ORDER BY SCHEMA_NAME;
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:192-208
+
+Default schema: `dbo`
+
+### Tables and Views
+
+Get tables in a schema:
+
+```typescript
+// Default schema (dbo)
+await connector.getTables();
+
+// Specific schema
+await connector.getTables('myschema');
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:210-235
+
+### Table Schema with Comments
+
+SQL Server supports column descriptions via extended properties:
+
+```sql
+EXEC sp_addextendedproperty 
+  @name = N'MS_Description',
+  @value = N'User email address',
+  @level0type = N'SCHEMA', @level0name = 'dbo',
+  @level1type = N'TABLE', @level1name = 'users',
+  @level2type = N'COLUMN', @level2name = 'email';
+```
+
+The connector retrieves these descriptions (src/connectors/sqlserver/index.ts:349-392):
+
+```typescript
+const schema = await connector.getTableSchema('users', 'dbo');
+// Returns: [
+//   {
+//     column_name: 'email',
+//     data_type: 'varchar',
+//     is_nullable: 'NO',
+//     column_default: null,
+//     description: 'User email address'
+//   }
+// ]
+```
+
+### Indexes
+
+SQL Server indexes include:
+- Primary keys (`is_primary: true`)
+- Unique indexes (`is_unique: true`)
+- Multi-column indexes
+- Clustered and non-clustered indexes
+- Filtered indexes
+
+**Implementation**: src/connectors/sqlserver/index.ts:266-347
+
+```typescript
+const indexes = await connector.getTableIndexes('users', 'dbo');
+// Returns: [
+//   {
+//     index_name: 'PK_users',
+//     column_names: ['id'],
+//     is_unique: true,
+//     is_primary: true
+//   },
+//   {
+//     index_name: 'IX_users_email',
+//     column_names: ['email'],
+//     is_unique: true,
+//     is_primary: false
+//   }
+// ]
+```
+
+### Stored Procedures and Functions
+
+SQL Server supports both stored procedures and functions:
+
+```typescript
+// Get all routines
+await connector.getStoredProcedures('dbo');
+
+// Only functions
+await connector.getStoredProcedures('dbo', 'function');
+
+// Only procedures
+await connector.getStoredProcedures('dbo', 'procedure');
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:429-463
+
+Get procedure details including definition:
+
+```typescript
+const proc = await connector.getStoredProcedureDetail('sp_GetUsers', 'dbo');
+// Returns: {
+//   procedure_name: 'sp_GetUsers',
+//   procedure_type: 'procedure',
+//   language: 'sql',
+//   parameter_list: '@user_id int IN',
+//   definition: 'CREATE PROCEDURE [dbo].[sp_GetUsers]...'
+// }
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:465-559
+
+Retrieves procedure definition from `sys.sql_modules`.
+
+### Table Comments
+
+Retrieve table-level descriptions:
+
+```sql
+EXEC sp_addextendedproperty 
+  @name = N'MS_Description',
+  @value = N'Application user accounts',
+  @level0type = N'SCHEMA', @level0name = 'dbo',
+  @level1type = N'TABLE', @level1name = 'users';
+```
+
+```typescript
+const comment = await connector.getTableComment('users', 'dbo');
+// Returns: 'Application user accounts'
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:394-427
+
+## Query Execution
+
+### Parameterized Queries
+
+SQL Server uses `@p1`, `@p2`, etc. for parameters:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM users WHERE email = @p1 AND active = @p2",
+  { maxRows: 100 },
+  ['user@example.com', true]
+);
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:575-600
+
+The connector automatically infers SQL Server types from JavaScript values:
+- `string` → `VarChar`
+- `number` (integer) → `Int`
+- `number` (float) → `Float`
+- `boolean` → `Bit`
+- `null`/`undefined` → `VarChar`
+- `Array`/`Object` → `VarChar` (JSON stringified)
+
+### Row Limiting
+
+SQL Server uses `TOP` or `OFFSET-FETCH` for limiting results:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+// Executes: SELECT TOP 100 * FROM large_table
+// Or for queries with ORDER BY: ... OFFSET 0 ROWS FETCH NEXT 100 ROWS ONLY
+```
+
+**Implementation**: src/connectors/sqlserver/index.ts:568-571
+
+### Multi-Statement Support
+
+SQL Server supports multi-statement execution:
+
+```typescript
+await connector.executeSQL(`
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+  SELECT * FROM accounts WHERE id IN (1, 2);
+`, { maxRows: undefined });
+```
+
+Note: Parameters are not supported for multi-statement queries.
+
+## Common Scenarios
+
+### Connect to Local SQL Server
+
+```bash
+# SQL Server Express
+export DSN="sqlserver://sa:YourPassword123@localhost:1433/mydb?instanceName=SQLEXPRESS&sslmode=disable"
+
+# Standard SQL Server
+export DSN="sqlserver://sa:YourPassword123@localhost:1433/mydb?sslmode=disable"
+```
+
+Or in TOML:
+
+```toml
+[[sources]]
+id = "local_sqlserver"
+dsn = "sqlserver://sa:YourPassword123@localhost:1433/mydb?instanceName=SQLEXPRESS&sslmode=disable"
+```
+
+### Connect to Azure SQL Database
+
+**Option 1: SQL Authentication**
+
+```toml
+[[sources]]
+id = "azure_sql"
+dsn = "sqlserver://username@servername:password@servername.database.windows.net:1433/mydb?sslmode=require"
+connection_timeout = 30
+```
+
+**Option 2: Azure AD Authentication**
+
+```toml
+[[sources]]
+id = "azure_ad_sql"
+dsn = "sqlserver://user@domain.com:pass@servername.database.windows.net:1433/mydb?authentication=azure-active-directory-access-token"
+```
+
+Requires Azure credentials configured via:
+- `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` environment variables
+- Managed Identity (when running in Azure)
+- Azure CLI (`az login`)
+
+### Connect with Windows Authentication (NTLM)
+
+```toml
+[[sources]]
+id = "windows_auth"
+dsn = "sqlserver://DOMAIN\\username:password@server:1433/mydb?authentication=ntlm&domain=DOMAIN"
+```
+
+Note: Backslashes in username must be escaped in TOML.
+
+### Connect Through SSH Tunnel
+
+```toml
+[[sources]]
+id = "remote_sqlserver"
+dsn = "sqlserver://dbuser:dbpass@internal-server:1433/mydb?sslmode=disable"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+```
+
+See [SSH Tunnels](/connectors/ssh-tunnels) for details.
+
+### Use Multiple Schemas
+
+```sql
+-- Create schema
+CREATE SCHEMA app;
+GO
+
+-- Create table in schema
+CREATE TABLE app.users (
+  id INT PRIMARY KEY,
+  name NVARCHAR(100)
+);
+```
+
+Query with schema qualification:
+
+```typescript
+await connector.getTables('app');
+await connector.getTableSchema('users', 'app');
+```
+
+## SQL Server-Specific SQL Examples
+
+### JSON Queries (SQL Server 2016+)
+
+```sql
+-- Query JSON columns
+SELECT 
+  JSON_VALUE(data, '$.name') as name,
+  JSON_QUERY(data, '$.tags') as tags
+FROM events
+WHERE JSON_VALUE(data, '$.type') = 'purchase';
+
+-- FOR JSON to output as JSON
+SELECT id, name, email
+FROM users
+FOR JSON PATH;
+```
+
+### Window Functions
+
+```sql
+SELECT 
+  date,
+  amount,
+  SUM(amount) OVER (ORDER BY date) as running_total,
+  ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY date DESC) as recency_rank
+FROM transactions;
+```
+
+### CTEs with MERGE
+
+```sql
+WITH source AS (
+  SELECT id, name, email FROM staging_users
+)
+MERGE users AS target
+USING source ON target.id = source.id
+WHEN MATCHED THEN
+  UPDATE SET name = source.name, email = source.email
+WHEN NOT MATCHED THEN
+  INSERT (id, name, email) VALUES (source.id, source.name, source.email);
+```
+
+### Temporal Tables (SQL Server 2016+)
+
+```sql
+-- Create temporal table
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name NVARCHAR(100),
+  email NVARCHAR(255),
+  ValidFrom DATETIME2 GENERATED ALWAYS AS ROW START,
+  ValidTo DATETIME2 GENERATED ALWAYS AS ROW END,
+  PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo)
+)
+WITH (SYSTEM_VERSIONING = ON);
+
+-- Query historical data
+SELECT * FROM users FOR SYSTEM_TIME AS OF '2024-01-01 00:00:00'
+WHERE id = 123;
+```
+
+### Full-Text Search
+
+```sql
+-- Create full-text index
+CREATE FULLTEXT INDEX ON articles(title, content)
+KEY INDEX PK_articles;
+
+-- Search with CONTAINS
+SELECT title, [RANK]
+FROM articles
+WHERE CONTAINS((title, content), 'sql server')
+ORDER BY [RANK] DESC;
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error**: `connect ECONNREFUSED`
+
+**Solutions**:
+1. Verify SQL Server is running: `services.msc` → SQL Server service
+2. Check SQL Server Configuration Manager:
+   - Enable TCP/IP protocol
+   - Set TCP port to 1433
+3. Verify Windows Firewall allows port 1433
+4. For named instances, ensure SQL Server Browser service is running
+
+### Login Failed
+
+**Error**: `Login failed for user 'username'`
+
+**Solutions**:
+1. Verify SQL Server authentication mode (mixed mode required for SQL auth)
+2. Check user exists:
+   ```sql
+   SELECT name, type_desc FROM sys.server_principals WHERE name = 'username';
+   ```
+3. Grant login access:
+   ```sql
+   CREATE LOGIN [username] WITH PASSWORD = 'password';
+   CREATE USER [username] FOR LOGIN [username];
+   ALTER ROLE db_owner ADD MEMBER [username];
+   ```
+
+### Named Instance Not Found
+
+**Error**: `Failed to connect to named instance`
+
+**Solutions**:
+1. Verify instance name: `SELECT @@SERVERNAME`
+2. Ensure SQL Server Browser service is running
+3. Use correct DSN format:
+   ```bash
+   sqlserver://user:pass@localhost:1433/db?instanceName=SQLEXPRESS
+   ```
+
+### Certificate Validation Failed
+
+**Error**: `The certificate chain was issued by an authority that is not trusted`
+
+**Solutions**:
+1. Use `sslmode=require` to skip certificate verification:
+   ```bash
+   sqlserver://user:pass@host:1433/db?sslmode=require
+   ```
+2. Or disable encryption for development:
+   ```bash
+   sqlserver://user:pass@host:1433/db?sslmode=disable
+   ```
+
+### Azure AD Authentication Failed
+
+**Error**: `Failed to get Azure AD token`
+
+**Solutions**:
+1. Configure Azure credentials:
+   ```bash
+   export AZURE_TENANT_ID="your-tenant-id"
+   export AZURE_CLIENT_ID="your-client-id"
+   export AZURE_CLIENT_SECRET="your-client-secret"
+   ```
+2. Or authenticate with Azure CLI:
+   ```bash
+   az login
+   ```
+3. Verify user has access to Azure SQL Database
+
+### NTLM Authentication Failed
+
+**Error**: `NTLM authentication failed`
+
+**Solutions**:
+1. Verify domain parameter matches Windows domain
+2. Use domain\username format correctly
+3. Check DSN format:
+   ```bash
+   sqlserver://domain_user:pass@server:1433/db?authentication=ntlm&domain=MYDOMAIN
+   ```
+
+## Performance Tips
+
+1. **Use connection pooling** (enabled by default in connector)
+2. **Create appropriate indexes** for frequently queried columns
+3. **Use parameterized queries** to enable query plan caching
+4. **Use SET NOCOUNT ON** in stored procedures to reduce network traffic
+5. **Consider columnstore indexes** for analytics queries
+6. **Use filtered indexes** for queries with common WHERE conditions
+7. **Monitor query execution plans** with EXPLAIN or SQL Server Profiler
+8. **Use table partitioning** for very large tables
+
+## Next Steps
+
+- [Configure multi-database connections](/config/toml)
+- [Set up SSH tunneling](/connectors/ssh-tunnels)
+- [Explore other connectors](/connectors/overview)

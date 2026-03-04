@@ -1,0 +1,284 @@
+---
+title: Development Overview
+description: Guide to contributing and developing DBHub
+---
+
+## Contributing to DBHub
+
+Welcome to DBHub development! This guide will help you get started with contributing to the project.
+
+### Fork and Branch Workflow
+
+1. **Fork the Repository**: Create your own fork of the [DBHub repository](https://github.com/bytebase/dbhub)
+2. **Clone Your Fork**:
+   ```bash
+   git clone https://github.com/YOUR_USERNAME/dbhub.git
+   cd dbhub
+   ```
+3. **Create a Feature Branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
+4. **Make Your Changes**: Implement your feature or bug fix
+5. **Commit Your Changes**: Follow the commit message conventions (see below)
+6. **Push to Your Fork**:
+   ```bash
+   git push origin feature/your-feature-name
+   ```
+7. **Submit a Pull Request**: Open a PR from your fork to the main repository
+
+## Development Setup
+
+### Prerequisites
+
+- Node.js 18+ or compatible runtime
+- pnpm package manager
+- Docker (for integration tests)
+
+### Installation
+
+```bash
+# Install dependencies
+pnpm install
+```
+
+### Development Commands
+
+```bash
+# Run in development mode (backend + frontend with hot reload)
+pnpm dev
+
+# Run backend only
+pnpm dev:backend
+
+# Run frontend only
+pnpm dev:frontend
+
+# Build for production
+pnpm build
+
+# Build backend only
+pnpm build:backend
+
+# Build frontend only
+pnpm build:frontend
+
+# Start production server
+pnpm start
+
+# Run all tests
+pnpm test
+
+# Run unit tests only
+pnpm test:unit
+
+# Run integration tests (requires Docker)
+pnpm test:integration
+
+# Run tests in watch mode
+pnpm test:watch
+```
+
+### Development Mode
+
+The development mode runs both backend and frontend servers:
+
+- **Backend API**: `http://localhost:8080` - MCP server and API endpoints
+- **Workbench Dev Server**: `http://localhost:5173` - Frontend with hot module replacement (HMR)
+
+```bash
+pnpm dev
+```
+
+This command uses `concurrently` to run both servers simultaneously. The frontend dev server proxies API requests to the backend.
+
+## Project Structure
+
+```
+dbhub/
+├── src/                    # Backend source code
+│   ├── connectors/         # Database connector implementations
+│   │   ├── postgres/       # PostgreSQL connector
+│   │   ├── mysql/          # MySQL connector
+│   │   ├── mariadb/        # MariaDB connector
+│   │   ├── sqlserver/      # SQL Server connector
+│   │   ├── sqlite/         # SQLite connector
+│   │   ├── interface.ts    # Connector interface definitions
+│   │   ├── manager.ts      # Connection manager (multi-source)
+│   │   └── __tests__/      # Integration tests
+│   ├── tools/              # MCP tool implementations
+│   │   ├── execute-sql.ts  # SQL execution tool
+│   │   ├── search-objects.ts # Database object search tool
+│   │   ├── index.ts        # Tool registration
+│   │   └── registry.ts     # Tool registry (built-in + custom)
+│   ├── utils/              # Shared utilities
+│   │   ├── sql-parser.ts   # SQL statement parsing
+│   │   ├── dsn-obfuscate.ts # DSN security/redaction
+│   │   ├── ssh-tunnel.ts   # SSH tunneling support
+│   │   └── response-formatter.ts # MCP response formatting
+│   ├── config/             # Configuration handling
+│   │   ├── toml-loader.ts  # TOML config parsing
+│   │   └── env.ts          # Environment variable handling
+│   ├── api/                # REST API endpoints
+│   ├── types/              # TypeScript type definitions
+│   ├── server.ts           # HTTP/stdio transport setup
+│   └── index.ts            # Application entry point
+├── frontend/               # Web-based workbench UI
+│   ├── src/                # React frontend source
+│   └── dist/               # Built frontend (served by backend)
+├── docs/                   # Documentation (this site)
+├── dist/                   # Compiled JavaScript output
+├── .claude/                # Claude Code skill definitions
+│   └── skills/
+│       └── testing/        # Testing skill documentation
+├── CLAUDE.md               # Development guidelines for AI assistants
+├── package.json            # Project dependencies and scripts
+├── tsconfig.json           # TypeScript configuration
+└── vitest.config.ts        # Test configuration
+```
+
+## Code Style Guidelines
+
+DBHub follows strict TypeScript and code organization standards:
+
+### TypeScript Standards
+
+- **Strict Mode Enabled**: All code must pass TypeScript strict mode checks
+- **ES Modules**: Use ES module syntax with `.js` extensions in imports
+  ```typescript
+  import { Connector } from "../connectors/interface.js";
+  ```
+- **Explicit Type Annotations**: Include types for function parameters and return values
+  ```typescript
+  async function getTables(schema?: string): Promise<string[]> {
+    // implementation
+  }
+  ```
+
+### Import Organization
+
+Group imports in the following order:
+
+1. Node.js core modules
+2. Third-party packages
+3. Local modules
+
+```typescript
+import { readFileSync } from "fs"; // Node.js core
+import pg from "pg"; // Third-party
+import { Connector } from "../interface.js"; // Local
+```
+
+### Naming Conventions
+
+- **Variables and Functions**: `camelCase`
+  ```typescript
+  const connectionString = "...";
+  function parseConnectionString() { }
+  ```
+- **Classes and Types**: `PascalCase`
+  ```typescript
+  class PostgresConnector { }
+  interface ConnectorConfig { }
+  type ConnectorType = "postgres" | "mysql";
+  ```
+- **Constants**: `SCREAMING_SNAKE_CASE` for true constants
+  ```typescript
+  const MAX_RETRIES = 3;
+  ```
+
+### Error Handling
+
+- **Database Connections**: Always use `try/finally` blocks to release resources
+  ```typescript
+  const client = await this.pool.connect();
+  try {
+    // Use client
+  } finally {
+    client.release();
+  }
+  ```
+- **Async/Await**: Prefer `async/await` over callbacks and Promise chains
+- **Descriptive Error Messages**: Include context about what failed
+  ```typescript
+  throw new Error(`Failed to connect to database '${dbName}': ${error.message}`);
+  ```
+
+### Database Operations
+
+- **Parameterized Queries**: Always use parameterized queries to prevent SQL injection
+- **Input Validation**: Use zod schemas for validating tool inputs
+- **Environment Variables**: Include fallbacks and validation
+
+### Code Organization
+
+- **Single Responsibility**: Keep functions focused on one task
+- **Descriptive Names**: Use clear, self-documenting variable and function names
+- **Comments**: Explain "why" not "what" - code should be self-explanatory
+
+## Testing Requirements
+
+Before submitting a pull request, ensure:
+
+1. **All Tests Pass**: Run `pnpm test` to verify
+2. **New Features Have Tests**: Add unit or integration tests for new functionality
+3. **Code Coverage**: Maintain or improve existing coverage
+4. **Pre-commit Hooks**: Tests run automatically on commit
+
+See [Testing](/development/testing) for detailed testing guidelines.
+
+## Commit Message Guidelines
+
+Follow conventional commit format:
+
+```
+type(scope): description
+
+[optional body]
+
+[optional footer]
+```
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `refactor`: Code refactoring
+- `test`: Adding or updating tests
+- `chore`: Maintenance tasks
+
+**Examples:**
+```
+feat(connectors): add Oracle database support
+
+fix(postgres): handle NULL values in table comments
+
+test(mysql): add integration tests for stored procedures
+```
+
+## Pull Request Process
+
+1. **Run Tests**: Ensure `pnpm test` passes
+2. **Update Documentation**: Add/update docs for new features
+3. **Describe Changes**: Provide a clear description in the PR
+4. **Link Issues**: Reference related issues (e.g., "Fixes #123")
+5. **Wait for Review**: Maintainers will review and provide feedback
+6. **Address Feedback**: Make requested changes
+7. **Merge**: PRs are merged after approval
+
+## Development Resources
+
+- [Architecture Overview](/development/architecture) - System design and patterns
+- [Testing Guide](/development/testing) - Running and writing tests
+- [Building Connectors](/development/building-connectors) - Add new database support
+- [CLAUDE.md](https://github.com/bytebase/dbhub/blob/main/CLAUDE.md) - AI assistant guidelines
+
+## Getting Help
+
+- **GitHub Issues**: [Report bugs or request features](https://github.com/bytebase/dbhub/issues)
+- **Discussions**: [Ask questions](https://github.com/bytebase/dbhub/discussions)
+- **Discord**: Join the community chat
+
+## License
+
+DBHub is open source under the MIT License. By contributing, you agree that your contributions will be licensed under the same terms.

@@ -1,80 +1,505 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get your first SQL query running in minutes with DBHub
 ---
 
-## Get started in three steps
+Get DBHub connected to a database and execute your first query in minutes. This guide walks you through the fastest ways to start exploring databases with AI assistants.
 
-Get your documentation site running locally and make your first customization.
+<Note>
+Choose from three quick start paths: Docker for containerized environments, npm for local development, or demo mode to try DBHub without a database.
+</Note>
 
-### Step 1: Set up your local environment
+## Quick start paths
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+<Steps>
+  <Step title="Choose your setup method">
+    <Tabs>
+      <Tab title="Docker">
+        Perfect for containerized environments and production deployments.
 
-### Step 2: Deploy your changes
+        <CodeGroup>
+        ```bash Connect to PostgreSQL
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ```
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+        ```bash Connect to MySQL
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --dsn "mysql://root:password@localhost:3306/mydb?sslmode=disable"
+        ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+        ```bash Connect to SQL Server
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --dsn "sqlserver://sa:YourStrong@Passw0rd@localhost:1433/master"
+        ```
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+        ```bash Connect to SQLite
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          --volume $(pwd)/mydb.db:/app/mydb.db \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --dsn "sqlite:///app/mydb.db"
+        ```
 
-### Step 3: Go live
+        ```bash Demo Mode
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --demo
+        ```
+        </CodeGroup>
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+        <Tip>
+        The `--init` flag ensures proper signal handling for graceful shutdowns.
+        </Tip>
+      </Tab>
+
+      <Tab title="npm">
+        Quick setup using npx (no installation required).
+
+        <CodeGroup>
+        ```bash Connect to PostgreSQL
+        npx @bytebase/dbhub@latest \
+          --transport http \
+          --port 8080 \
+          --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ```
+
+        ```bash Connect to MySQL
+        npx @bytebase/dbhub@latest \
+          --transport http \
+          --port 8080 \
+          --dsn "mysql://root:password@localhost:3306/mydb?sslmode=disable"
+        ```
+
+        ```bash Connect to MariaDB
+        npx @bytebase/dbhub@latest \
+          --transport http \
+          --port 8080 \
+          --dsn "mariadb://root:password@localhost:3306/mydb?sslmode=disable"
+        ```
+
+        ```bash Demo Mode
+        npx @bytebase/dbhub@latest \
+          --transport http \
+          --port 8080 \
+          --demo
+        ```
+        </CodeGroup>
+
+        <Info>
+        Using `@latest` ensures you're running version **0.17.0** or newer.
+        </Info>
+      </Tab>
+
+      <Tab title="Demo mode">
+        Try DBHub instantly with a bundled SQLite employee database. No database setup required!
+
+        ```bash
+        npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+        ```
+
+        The demo database includes sample tables with employee data:
+        - `employee` - Employee records with names and hire dates
+        - `department` - Department information
+        - `salary` - Salary history
+        - `dept_manager` - Department manager assignments
+        - `dept_emp` - Employee department assignments
+
+        <Tip>
+        Demo mode is perfect for learning DBHub features and testing MCP tool integrations.
+        </Tip>
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Access the workbench">
+    Once DBHub is running, open the built-in workbench in your browser:
+
+    ```
+    http://localhost:8080
+    ```
+
+    The workbench provides a visual interface for:
+    - Testing SQL queries with the `execute_sql` tool
+    - Exploring database schemas with the `search_objects` tool
+    - Running custom tools
+    - Viewing request traces and performance metrics
+
+    <Note>
+    The workbench runs on HTTP transport (port 8080) regardless of your MCP transport setting.
+    </Note>
+  </Step>
+
+  <Step title="Execute your first query">
+    Use the **execute_sql** tool to run your first SQL query.
+
+    <Tabs>
+      <Tab title="Demo database">
+        Try these queries on the demo employee database:
+
+        ```sql List all employees
+        SELECT emp_no, first_name, last_name, hire_date 
+        FROM employee 
+        LIMIT 10;
+        ```
+
+        ```sql Find high earners
+        SELECT e.first_name, e.last_name, s.amount as salary
+        FROM employee e
+        JOIN salary s ON e.emp_no = s.emp_no
+        WHERE s.amount > 80000
+        ORDER BY s.amount DESC
+        LIMIT 5;
+        ```
+
+        ```sql Current department managers
+        SELECT e.first_name, e.last_name, d.dept_name, dm.from_date
+        FROM dept_manager dm
+        JOIN employee e ON dm.emp_no = e.emp_no
+        JOIN department d ON dm.dept_no = d.dept_no
+        ORDER BY d.dept_name;
+        ```
+      </Tab>
+
+      <Tab title="Your database">
+        Start with simple queries to explore your schema:
+
+        ```sql List tables (PostgreSQL)
+        SELECT tablename 
+        FROM pg_tables 
+        WHERE schemaname = 'public';
+        ```
+
+        ```sql List tables (MySQL/MariaDB)
+        SHOW TABLES;
+        ```
+
+        ```sql List tables (SQL Server)
+        SELECT TABLE_NAME 
+        FROM INFORMATION_SCHEMA.TABLES 
+        WHERE TABLE_TYPE = 'BASE TABLE';
+        ```
+
+        ```sql List tables (SQLite)
+        SELECT name 
+        FROM sqlite_master 
+        WHERE type='table';
+        ```
+      </Tab>
+    </Tabs>
+
+    <Info>
+    The `execute_sql` tool supports multiple statements separated by semicolons and includes transaction support.
+    </Info>
+  </Step>
+
+  <Step title="Explore your schema">
+    Use the **search_objects** tool to discover database structure without writing SQL.
+
+    <CodeGroup>
+    ```json List all tables (minimal)
+    {
+      "object_type": "table",
+      "detail_level": "names"
+    }
+    ```
+
+    ```json Search for specific tables
+    {
+      "object_type": "table",
+      "pattern": "employee%",
+      "detail_level": "summary"
+    }
+    ```
+
+    ```json Get full table details
+    {
+      "object_type": "table",
+      "pattern": "employee",
+      "detail_level": "full"
+    }
+    ```
+
+    ```json List columns in a table
+    {
+      "object_type": "column",
+      "schema": "public",
+      "table": "employee",
+      "detail_level": "summary"
+    }
+    ```
+
+    ```json Search for columns by name
+    {
+      "object_type": "column",
+      "pattern": "%_date",
+      "detail_level": "summary"
+    }
+    ```
+
+    ```json List stored procedures
+    {
+      "object_type": "procedure",
+      "schema": "public",
+      "detail_level": "names"
+    }
+    ```
+    </CodeGroup>
+
+    <Tip>
+    Use `detail_level: "names"` to minimize token usage and progressively request more details when needed.
+    </Tip>
+
+    ### Search patterns
+
+    The `search_objects` tool supports SQL LIKE patterns:
+    - `%` matches any number of characters
+    - `_` matches exactly one character
+    - Omit `pattern` to list all objects (defaults to `%`)
+
+    ### Object types
+
+    Search these database objects:
+    - `schema` - Database schemas
+    - `table` - Tables and views
+    - `column` - Table columns
+    - `index` - Table indexes
+    - `procedure` - Stored procedures
+    - `function` - Database functions
+  </Step>
+</Steps>
+
+## Connect to a real database
+
+Ready to connect DBHub to your own database? Here are DSN examples for each database type:
+
+<CodeGroup>
+```bash PostgreSQL
+postgres://user:password@localhost:5432/dbname?sslmode=disable
+postgres://user:password@db.example.com:5432/prod?sslmode=require
+```
+
+```bash MySQL
+mysql://root:password@localhost:3306/myapp?sslmode=disable
+mysql://app_user:password@mysql.internal:3306/production?sslmode=require
+```
+
+```bash MariaDB
+mariadb://root:password@localhost:3306/myapp?sslmode=disable
+mariadb://app_user:password@mariadb.internal:3306/production?sslmode=require
+```
+
+```bash SQL Server
+sqlserver://sa:YourStrong@Passw0rd@localhost:1433/master
+
+# Named instance
+sqlserver://user:pass@localhost:1433/dbname?instanceName=SQLEXPRESS
+
+# Windows/NTLM authentication
+sqlserver://jsmith:secret@server.corp.local:1433/app_db?authentication=ntlm&domain=CORP
+```
+
+```bash SQLite
+sqlite:///path/to/database.db
+sqlite:///home/user/data/app.db
+sqlite:///:memory:
+```
+</CodeGroup>
+
+<Warning>
+If your password contains special characters like `@`, `:`, `/`, or `#`, use environment variables or TOML configuration instead of DSN strings. See [configuration options](/config/environment) for details.
+</Warning>
+
+### SSL/TLS connections
+
+For production databases, enable SSL encryption:
+
+```bash
+# PostgreSQL with SSL
+postgres://user:password@db.example.com:5432/prod?sslmode=require
+
+# MySQL with SSL
+mysql://user:password@db.example.com:3306/prod?sslmode=require
+```
+
+Available SSL modes:
+- `sslmode=disable` - No SSL encryption (default, for development only)
+- `sslmode=require` - SSL encryption without certificate verification
+
+<Tip>
+Always use `sslmode=require` for production databases to encrypt your connection.
+</Tip>
+
+## Configure for MCP clients
+
+DBHub works with any MCP-compatible client. Here's how to configure popular clients:
+
+<Tabs>
+  <Tab title="Claude Desktop">
+    Add DBHub to your Claude Desktop configuration:
+
+    <CodeGroup>
+    ```json macOS
+    // ~/Library/Application Support/Claude/claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+
+    ```json Windows
+    // %APPDATA%\Claude\claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+
+    ```json Linux
+    // ~/.config/Claude/claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+
+    <Note>
+    Claude Desktop uses **stdio transport** by default. Do not add `--transport http` to the args.
+    </Note>
+
+    ### With demo mode
+
+    ```json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": ["@bytebase/dbhub@latest", "--demo"]
+        }
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Cursor">
+    Configure Cursor to use DBHub:
+
+    ```json
+    {
+      "dbhub": {
+        "command": "npx",
+        "args": [
+          "@bytebase/dbhub@latest",
+          "--dsn",
+          "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ]
+      }
+    }
+    ```
+
+    Add this to your Cursor MCP settings (Settings > MCP Servers).
+  </Tab>
+
+  <Tab title="VS Code">
+    Install an MCP extension for VS Code and add DBHub:
+
+    ```json
+    // .vscode/settings.json
+    {
+      "mcp.servers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
+  <Card title="Multi-database setup" icon="database" href="/config/toml">
+    Connect to multiple databases simultaneously with TOML configuration
+  </Card>
+  
+  <Card title="SSH tunnels" icon="key" href="/connectors/ssh-tunnels">
+    Securely connect through bastion hosts with SSH tunneling
+  </Card>
+  
+  <Card title="Custom tools" icon="wrench" href="/tools/custom-tools">
+    Define reusable SQL operations as parameterized MCP tools
+  </Card>
+  
+  <Card title="Workbench" icon="browser" href="/workbench/overview">
+    Learn about the built-in web interface and request tracing
+  </Card>
 
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
+  <Card title="execute_sql tool" icon="play" href="/tools/execute-sql">
+    Deep dive into SQL execution with transaction support
+  </Card>
+  
+  <Card title="search_objects tool" icon="magnifying-glass" href="/tools/search-objects">
+    Master progressive schema discovery with minimal tokens
+  </Card>
 
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
+  <Card title="Command-line options" icon="terminal" href="/config/command-line">
+    Full reference of CLI arguments and configuration
+  </Card>
 
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Security best practices" icon="shield" href="/guides/security">
+    Learn about read-only mode, row limits, and secure connections
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

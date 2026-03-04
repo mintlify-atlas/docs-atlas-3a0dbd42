@@ -1,0 +1,463 @@
+---
+title: Installation
+description: Install DBHub using Docker, npm, or build from source
+---
+
+DBHub can be installed and run in multiple ways depending on your environment and preferences.
+
+## Installation methods
+
+<Tabs>
+  <Tab title="Docker">
+    The easiest way to run DBHub is using the official Docker image:
+
+    ```bash
+    docker run --rm --init \
+      --name dbhub \
+      --publish 8080:8080 \
+      bytebase/dbhub \
+      --transport http \
+      --port 8080 \
+      --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+    ```
+
+    <Tip>
+    The `--init` flag ensures proper signal handling for graceful shutdowns.
+    </Tip>
+
+    ### With TOML configuration
+
+    For multi-database setups, mount your `dbhub.toml` configuration file:
+
+    ```bash
+    docker run --rm --init \
+      --name dbhub \
+      --publish 8080:8080 \
+      --volume $(pwd)/dbhub.toml:/app/dbhub.toml \
+      bytebase/dbhub \
+      --transport http \
+      --port 8080 \
+      --config /app/dbhub.toml
+    ```
+
+    ### Demo mode
+
+    Try DBHub with a bundled SQLite employee database:
+
+    ```bash
+    docker run --rm --init \
+      --name dbhub \
+      --publish 8080:8080 \
+      bytebase/dbhub \
+      --transport http \
+      --port 8080 \
+      --demo
+    ```
+  </Tab>
+
+  <Tab title="npm">
+    Install DBHub globally using npm:
+
+    ```bash
+    npm install -g @bytebase/dbhub
+    ```
+
+    Or run directly with npx (no installation required):
+
+    ```bash
+    npx @bytebase/dbhub@latest \
+      --transport http \
+      --port 8080 \
+      --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+    ```
+
+    <Note>
+    Using `@latest` ensures you're always running the most recent version. The current version is **0.17.0**.
+    </Note>
+
+    ### With environment variables
+
+    Create a `.env` file and run without command-line arguments:
+
+    ```bash .env
+    DSN=postgres://user:password@localhost:5432/dbname
+    TRANSPORT=http
+    PORT=8080
+    ```
+
+    ```bash
+    npx @bytebase/dbhub@latest
+    ```
+
+    ### Demo mode
+
+    ```bash
+    npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+    ```
+  </Tab>
+
+  <Tab title="Build from source">
+    Clone the repository and build from source:
+
+    ```bash
+    # Clone the repository
+    git clone https://github.com/bytebase/dbhub.git
+    cd dbhub
+
+    # Install dependencies
+    pnpm install
+
+    # Build the project
+    pnpm build
+
+    # Run DBHub
+    pnpm start -- --transport http --port 8080 --dsn "postgres://user:password@localhost:5432/dbname"
+    ```
+
+    ### Development mode
+
+    Run in development mode with hot reloading:
+
+    ```bash
+    # Start both backend and frontend in dev mode
+    pnpm dev
+    ```
+
+    This starts:
+    - Backend MCP server on HTTP transport
+    - Frontend development server with hot module replacement
+
+    <Info>
+    Development mode automatically uses any `dbhub.toml` file in your project directory.
+    </Info>
+  </Tab>
+</Tabs>
+
+## Configure MCP clients
+
+Once DBHub is installed, configure your MCP client to connect to it.
+
+<Tabs>
+  <Tab title="Claude Desktop">
+    Add DBHub to your Claude Desktop configuration file:
+
+    <CodeGroup>
+    ```json macOS
+    // ~/Library/Application Support/Claude/claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+
+    ```json Windows
+    // %APPDATA%\Claude\claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+
+    ```json Linux
+    // ~/.config/Claude/claude_desktop_config.json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+    </CodeGroup>
+
+    <Note>
+    Claude Desktop uses **stdio transport** by default. Do not specify `--transport http` in the configuration.
+    </Note>
+
+    ### With TOML configuration
+
+    ```json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--config",
+            "/path/to/dbhub.toml"
+          ]
+        }
+      }
+    }
+    ```
+
+    ### With demo mode
+
+    ```json
+    {
+      "mcpServers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--demo"
+          ]
+        }
+      }
+    }
+    ```
+  </Tab>
+
+  <Tab title="Cursor">
+    Add DBHub to your Cursor MCP settings:
+
+    1. Open Cursor Settings
+    2. Navigate to "MCP Servers"
+    3. Add a new server with the following configuration:
+
+    ```json
+    {
+      "dbhub": {
+        "command": "npx",
+        "args": [
+          "@bytebase/dbhub@latest",
+          "--dsn",
+          "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ]
+      }
+    }
+    ```
+
+    <Note>
+    Cursor uses **stdio transport**. The DSN can also be provided via environment variables or TOML configuration.
+    </Note>
+  </Tab>
+
+  <Tab title="VS Code">
+    Install the MCP extension for VS Code and configure DBHub:
+
+    ```json
+    // .vscode/settings.json or User Settings
+    {
+      "mcp.servers": {
+        "dbhub": {
+          "command": "npx",
+          "args": [
+            "@bytebase/dbhub@latest",
+            "--dsn",
+            "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+          ]
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## DSN formats
+
+DBHub supports standard connection string formats for all databases:
+
+<CodeGroup>
+```bash PostgreSQL
+postgres://user:password@localhost:5432/dbname?sslmode=disable
+postgres://user:password@localhost:5432/dbname?sslmode=require
+```
+
+```bash MySQL
+mysql://user:password@localhost:3306/dbname?sslmode=disable
+mysql://user:password@localhost:3306/dbname?sslmode=require
+```
+
+```bash MariaDB
+mariadb://user:password@localhost:3306/dbname?sslmode=disable
+mariadb://user:password@localhost:3306/dbname?sslmode=require
+```
+
+```bash SQL Server
+sqlserver://user:password@localhost:1433/dbname?sslmode=disable
+# Named instance
+sqlserver://user:password@localhost:1433/dbname?instanceName=SQLEXPRESS
+# NTLM authentication
+sqlserver://user:password@localhost:1433/dbname?authentication=ntlm&domain=MYDOMAIN
+```
+
+```bash SQLite
+sqlite:///path/to/database.db
+sqlite:///:memory:
+```
+</CodeGroup>
+
+<Warning>
+If your password contains special characters like `@`, `:`, `/`, or `#`, use environment variables or TOML configuration with individual parameters instead of a DSN string.
+</Warning>
+
+### SSL modes
+
+- `sslmode=disable`: No SSL encryption (default)
+- `sslmode=require`: SSL encryption without certificate verification
+
+<Tip>
+For production databases, always use `sslmode=require` to encrypt your connection.
+</Tip>
+
+## Command-line options
+
+DBHub accepts the following command-line arguments:
+
+| Option | Description | Default |
+|--------|-------------|----------|
+| `--dsn` | Database connection string | - |
+| `--transport` | Transport protocol: `stdio` or `http` | `stdio` |
+| `--port` | HTTP server port | `8080` |
+| `--config` | Path to TOML configuration file | `./dbhub.toml` |
+| `--demo` | Use bundled SQLite employee database | `false` |
+| `--readonly` | Restrict to read-only operations (deprecated, use TOML) | `false` |
+| `--max-rows` | Limit rows returned from SELECT (deprecated, use TOML) | unlimited |
+| `--ssh-host` | SSH tunnel hostname | - |
+| `--ssh-port` | SSH tunnel port | `22` |
+| `--ssh-user` | SSH tunnel username | - |
+| `--ssh-password` | SSH tunnel password | - |
+| `--ssh-key` | Path to SSH private key | - |
+| `--ssh-passphrase` | SSH key passphrase | - |
+
+<Info>
+Command-line arguments have the highest priority and will override environment variables and TOML configuration.
+</Info>
+
+## Environment variables
+
+Alternatively, configure DBHub using environment variables:
+
+```bash .env
+# Connection string
+DSN=postgres://user:password@localhost:5432/dbname
+
+# Or individual parameters
+DB_TYPE=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=my@password:with/special#chars
+DB_NAME=mydatabase
+
+# Transport and port
+TRANSPORT=stdio
+PORT=8080
+
+# SSH tunnel (optional)
+SSH_HOST=bastion.example.com
+SSH_PORT=22
+SSH_USER=ubuntu
+SSH_KEY=~/.ssh/id_rsa
+```
+
+<Note>
+Supported `DB_TYPE` values: `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`
+</Note>
+
+## Verify installation
+
+After installation, verify DBHub is working:
+
+<Steps>
+  <Step title="Start DBHub in HTTP mode">
+    ```bash
+    npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+    ```
+  </Step>
+
+  <Step title="Open the workbench">
+    Navigate to `http://localhost:8080` in your browser.
+  </Step>
+
+  <Step title="Test a query">
+    Use the `execute_sql` tool to run a simple query:
+    ```sql
+    SELECT * FROM employee LIMIT 5;
+    ```
+  </Step>
+</Steps>
+
+If you see query results, DBHub is installed correctly!
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Connection refused errors">
+    - Verify your database is running and accessible
+    - Check that the hostname, port, and credentials are correct
+    - For remote databases, ensure firewall rules allow connections
+    - Try connecting with a database client (psql, mysql, etc.) using the same credentials
+  </Accordion>
+
+  <Accordion title="SSL/TLS errors">
+    - For development, use `?sslmode=disable` in your DSN
+    - For production, ensure SSL certificates are properly configured
+    - Some cloud providers (AWS RDS, Azure) require `sslmode=require`
+  </Accordion>
+
+  <Accordion title="Special characters in password">
+    If your password contains `@`, `:`, `/`, or `#`, use environment variables with individual parameters:
+    
+    ```bash
+    DB_TYPE=postgres
+    DB_HOST=localhost
+    DB_PORT=5432
+    DB_USER=myuser
+    DB_PASSWORD=my@complex:password/123
+    DB_NAME=mydb
+    ```
+  </Accordion>
+
+  <Accordion title="MCP client not detecting tools">
+    - Restart your MCP client after updating the configuration
+    - Check that the DBHub process is running (look for the `dbhub` process)
+    - Verify the configuration file path is correct
+    - Check MCP client logs for connection errors
+  </Accordion>
+
+  <Accordion title="Permission denied on SQLite file">
+    - Ensure the SQLite file path is absolute, not relative
+    - Check file permissions allow read/write access
+    - For demo mode, no file path is needed (uses in-memory database)
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Execute your first SQL query in minutes
+  </Card>
+  <Card title="Multi-database setup" icon="database" href="/config/toml">
+    Configure multiple database connections with TOML
+  </Card>
+  <Card title="SSH tunnels" icon="key" href="/connectors/ssh-tunnels">
+    Connect securely through bastion hosts
+  </Card>
+  <Card title="Command-line options" icon="terminal" href="/config/command-line">
+    Full reference of all CLI arguments
+  </Card>
+</CardGroup>

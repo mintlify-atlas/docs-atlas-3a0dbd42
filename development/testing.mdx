@@ -1,0 +1,605 @@
+---
+title: Testing
+description: Comprehensive testing guide for DBHub
+---
+
+## Testing Approach
+
+DBHub uses a comprehensive testing strategy combining unit tests and integration tests to ensure reliability across all supported databases.
+
+### Testing Stack
+
+- **Test Framework**: [Vitest](https://vitest.dev/) - Fast, modern test runner
+- **Integration Testing**: [Testcontainers](https://testcontainers.com/) - Real database instances in Docker
+- **Type Safety**: TypeScript strict mode for compile-time validation
+
+## Running Tests
+
+### All Tests
+
+```bash
+pnpm test
+```
+
+Runs both unit and integration tests.
+
+### Unit Tests Only
+
+```bash
+pnpm test:unit
+```
+
+Fast tests for utilities, parsers, and business logic without database dependencies.
+
+### Integration Tests
+
+```bash
+pnpm test:integration
+```
+
+Requires Docker to be running. Spins up real database containers for testing.
+
+### Watch Mode
+
+```bash
+pnpm test:watch
+```
+
+Runs tests in watch mode - automatically re-runs tests when files change.
+
+### Specific Database Tests
+
+Test individual database connectors:
+
+```bash
+# PostgreSQL
+pnpm test src/connectors/__tests__/postgres.integration.test.ts
+
+# MySQL
+pnpm test src/connectors/__tests__/mysql.integration.test.ts
+
+# MariaDB
+pnpm test src/connectors/__tests__/mariadb.integration.test.ts
+
+# SQL Server
+pnpm test src/connectors/__tests__/sqlserver.integration.test.ts
+
+# SQLite
+pnpm test src/connectors/__tests__/sqlite.integration.test.ts
+
+# PostgreSQL with SSH tunneling
+pnpm test src/connectors/__tests__/postgres-ssh.integration.test.ts
+```
+
+## Test Configuration
+
+**Location**: `vitest.config.ts`
+
+The configuration defines two test projects:
+
+```typescript
+{
+  projects: [
+    {
+      name: 'unit',
+      test: {
+        include: ['src/**/*.test.ts'],
+        exclude: ['src/**/*.integration.test.ts']
+      }
+    },
+    {
+      name: 'integration',
+      test: {
+        include: ['src/**/*.integration.test.ts'],
+        testTimeout: 60000 // 60 seconds for container startup
+      }
+    }
+  ]
+}
+```
+
+## Integration Testing with Testcontainers
+
+### Prerequisites
+
+Before running integration tests, ensure:
+
+1. **Docker is installed and running**:
+   ```bash
+   docker ps
+   ```
+2. **Sufficient Docker memory** (4GB+ recommended for SQL Server)
+3. **Network access** to pull Docker images
+
+### How Testcontainers Work
+
+Testcontainers automatically:
+
+1. Pulls the specified database Docker image
+2. Starts a container with random ports
+3. Waits for the database to be ready
+4. Provides connection details to your tests
+5. Cleans up containers after tests complete
+
+### Database Images Used
+
+```typescript
+// PostgreSQL
+const container = await new PostgreSqlContainer('postgres:15-alpine').start();
+
+// MySQL
+const container = await new MySqlContainer('mysql:8.0').start();
+
+// MariaDB
+const container = await new MariaDBContainer('mariadb:10.11').start();
+
+// SQL Server
+const container = await new MSSQLServerContainer(
+  'mcr.microsoft.com/mssql/server:2019-latest'
+).start();
+
+// SQLite (no container needed - in-memory)
+```
+
+## Integration Test Architecture
+
+### Shared Test Base
+
+All connector integration tests extend `IntegrationTestBase` for consistency.
+
+**Location**: `src/connectors/__tests__/shared/integration-test-base.ts`
+
+**Benefits:**
+- Consistent test structure across all databases
+- Reusable test setup and teardown
+- Common test scenarios
+- Reduced code duplication
+
+### Test Lifecycle
+
+```typescript
+class PostgreSQLIntegrationTest extends IntegrationTestBase {
+  // 1. Create database container
+  async createContainer(): Promise<TestContainer> {
+    const container = await new PostgreSqlContainer().start();
+    return new PostgreSQLTestContainer(container);
+  }
+
+  // 2. Create connector instance
+  createConnector(): Connector {
+    return new PostgresConnector();
+  }
+
+  // 3. Setup test data
+  async setupTestData(connector: Connector): Promise<void> {
+    await connector.executeSQL('CREATE TABLE users (...)', {});
+    await connector.executeSQL('INSERT INTO users ...', {});
+  }
+
+  // 4. Run tests
+  // 5. Cleanup (automatic)
+}
+```
+
+### Example Integration Test
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { PostgreSqlContainer } from '@testcontainers/postgresql';
+import { PostgresConnector } from '../postgres/index.js';
+
+let container: PostgreSqlContainer;
+let connector: PostgresConnector;
+
+beforeAll(async () => {
+  // Start container
+  container = await new PostgreSqlContainer('postgres:15-alpine')
+    .withDatabase('testdb')
+    .withUsername('testuser')
+    .withPassword('testpass')
+    .start();
+
+  // Connect
+  connector = new PostgresConnector();
+  await connector.connect(container.getConnectionUri());
+
+  // Setup test data
+  await connector.executeSQL(`
+    CREATE TABLE users (
+      id SERIAL PRIMARY KEY,
+      name VARCHAR(100),
+      email VARCHAR(100) UNIQUE
+    )
+  `, {});
+}, 60000); // 60 second timeout
+
+afterAll(async () => {
+  await connector.disconnect();
+  await container.stop();
+});
+
+it('should query users table', async () => {
+  const result = await connector.executeSQL(
+    'SELECT * FROM users',
+    {}
+  );
+  expect(result.rows).toBeDefined();
+  expect(result.rowCount).toBeGreaterThanOrEqual(0);
+});
+```
+
+## Common Test Scenarios
+
+Each connector integration test covers:
+
+### 1. Connection Tests
+- Successful connection with valid DSN
+- Connection failure with invalid credentials
+- SSL/TLS connection modes
+- Connection timeout handling
+
+### 2. Schema Discovery
+- List all schemas
+- List tables in a schema
+- Get table column information
+- Get table indexes
+- List stored procedures/functions (if supported)
+
+### 3. Query Execution
+- Simple SELECT queries
+- Parameterized queries
+- Multi-statement execution (transactions)
+- Query timeout enforcement
+- Row limiting (maxRows option)
+
+### 4. Data Types
+- String/varchar types
+- Numeric types (integers, decimals)
+- Date/time types
+- Boolean types
+- NULL handling
+- Binary/blob types (if supported)
+
+### 5. Error Handling
+- Invalid SQL syntax
+- Non-existent tables
+- Permission errors
+- Connection errors
+- Query timeout errors
+
+### 6. Database-Specific Features
+
+**PostgreSQL:**
+- Array types
+- JSON/JSONB types
+- User-defined types
+- Nested multi-line comments
+- Dollar-quoted strings
+- search_path configuration
+
+**MySQL/MariaDB:**
+- Backtick identifiers
+- AUTO_INCREMENT columns
+- MySQL-specific data types
+
+**SQL Server:**
+- Bracket identifiers
+- Named instances
+- NTLM authentication
+- IDENTITY columns
+
+**SQLite:**
+- In-memory databases (`:memory:`)
+- File-based databases
+- Simplified type system
+- Read-only mode
+
+## SSH Tunnel Tests
+
+**Location**: `src/connectors/__tests__/postgres-ssh.integration.test.ts`
+
+Tests SSH tunneling through a bastion host:
+
+```bash
+pnpm test postgres-ssh.integration.test.ts
+```
+
+**Test Setup:**
+1. Start SSH server container (openssh-server)
+2. Start PostgreSQL container (not exposed to host)
+3. Configure SSH tunnel through bastion
+4. Connect to PostgreSQL via tunnel
+5. Verify queries work through tunnel
+
+**Covers:**
+- Password-based SSH authentication
+- Key-based SSH authentication
+- SSH config file parsing
+- ProxyJump support
+- Keepalive settings
+- Error handling for SSH failures
+
+## Pre-Commit Hooks
+
+DBHub uses Git pre-commit hooks to run related tests automatically:
+
+**Location**: `.git/hooks/pre-commit` (auto-generated)
+
+**Behavior:**
+- Detects changed files
+- Runs unit tests for modified utilities
+- Runs integration tests for modified connectors
+- Fast feedback loop (only runs relevant tests)
+
+**Manual Override:**
+
+```bash
+# Skip pre-commit hooks (not recommended)
+git commit --no-verify
+```
+
+## Writing New Tests
+
+### Unit Test Example
+
+**Location**: `src/utils/__tests__/sql-parser.test.ts`
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { splitSQLStatements, stripCommentsAndStrings } from '../sql-parser.js';
+
+describe('SQL Parser', () => {
+  describe('splitSQLStatements', () => {
+    it('should split multiple statements', () => {
+      const sql = 'SELECT 1; SELECT 2; SELECT 3;';
+      const statements = splitSQLStatements(sql);
+      expect(statements).toEqual([
+        'SELECT 1',
+        'SELECT 2',
+        'SELECT 3'
+      ]);
+    });
+
+    it('should ignore semicolons in strings', () => {
+      const sql = "SELECT ';' as semicolon; SELECT 1;";
+      const statements = splitSQLStatements(sql, 'postgres');
+      expect(statements).toEqual([
+        "SELECT ';' as semicolon",
+        'SELECT 1'
+      ]);
+    });
+  });
+});
+```
+
+### Integration Test for New Connector
+
+```typescript
+import { IntegrationTestBase } from './shared/integration-test-base.js';
+import { MyNewConnector } from '../mynewdb/index.js';
+import { MyNewDBContainer } from '@testcontainers/mynewdb';
+
+class MyNewDBIntegrationTest extends IntegrationTestBase {
+  constructor() {
+    super({
+      expectedSchemas: ['public'],
+      expectedTables: ['test_table'],
+      supportsStoredProcedures: false,
+      supportsComments: true,
+    });
+  }
+
+  async createContainer() {
+    const container = await new MyNewDBContainer()
+      .withDatabase('testdb')
+      .start();
+    return { 
+      getConnectionUri: () => container.getConnectionUri(),
+      stop: () => container.stop()
+    };
+  }
+
+  createConnector() {
+    return new MyNewConnector();
+  }
+
+  async setupTestData(connector) {
+    await connector.executeSQL(
+      'CREATE TABLE test_table (id INT, name TEXT)',
+      {}
+    );
+  }
+}
+
+const test = new MyNewDBIntegrationTest();
+test.run();
+```
+
+## Test Coverage Expectations
+
+### Minimum Coverage Goals
+
+- **Utilities**: 80%+ line coverage
+- **Connectors**: All core methods tested
+- **Tools**: Happy path + error cases
+- **Integration**: All supported databases
+
+### Critical Paths Requiring Tests
+
+1. **Connection handling** - connect/disconnect lifecycle
+2. **SQL execution** - executeSQL with various options
+3. **Schema discovery** - getSchemas, getTables, getTableSchema
+4. **DSN parsing** - all supported DSN formats
+5. **Error handling** - network errors, SQL errors, timeouts
+
+## Troubleshooting
+
+### Container Startup Issues
+
+**Problem**: Containers fail to start
+
+**Solutions**:
+```bash
+# Verify Docker is running
+docker ps
+
+# Check disk space
+docker system df
+
+# Manually pull images
+docker pull postgres:15-alpine
+docker pull mysql:8.0
+docker pull mariadb:10.11
+docker pull mcr.microsoft.com/mssql/server:2019-latest
+
+# Clean up old containers
+docker system prune
+```
+
+### SQL Server Timeout Issues
+
+**Problem**: SQL Server tests timeout
+
+**Cause**: SQL Server requires 3-5 minutes to start and additional memory
+
+**Solutions**:
+- Increase Docker memory allocation to 4GB+
+- Run SQL Server tests separately:
+  ```bash
+  pnpm test src/connectors/__tests__/sqlserver.integration.test.ts
+  ```
+- Increase test timeout in `vitest.config.ts`
+
+### Port Conflicts
+
+**Problem**: Container fails due to port already in use
+
+**Solution**: Testcontainers automatically selects random ports, but if issues persist:
+```bash
+# Stop conflicting containers
+docker ps
+docker stop <container_id>
+```
+
+### Memory Issues
+
+**Problem**: Tests crash or containers fail to start
+
+**Solution**: 
+- Increase Docker memory limit (Docker Desktop → Settings → Resources)
+- Run fewer tests in parallel
+- Run database tests sequentially:
+  ```bash
+  pnpm test postgres.integration.test.ts
+  pnpm test mysql.integration.test.ts
+  ```
+
+### Debug Failed Tests
+
+```bash
+# Run with verbose output
+pnpm test:integration --reporter=verbose
+
+# Run specific test pattern
+pnpm test:integration -- --testNamePattern="PostgreSQL"
+
+# Check container logs
+docker logs <container_id>
+
+# Keep containers running after test (for debugging)
+# Add to test: await new Promise(resolve => setTimeout(resolve, 300000));
+```
+
+## Continuous Integration (CI/CD)
+
+### GitHub Actions Workflow
+
+**Location**: `.github/workflows/test.yml`
+
+**Triggers:**
+- Push to main branch
+- Pull request creation/update
+- Manual workflow dispatch
+
+**Jobs:**
+
+1. **Unit Tests**: Fast tests without Docker
+   ```yaml
+   - name: Run unit tests
+     run: pnpm test:unit
+   ```
+
+2. **Integration Tests**: Full database testing
+   ```yaml
+   - name: Run integration tests
+     run: pnpm test:integration
+   ```
+
+3. **Type Checking**: TypeScript compilation
+   ```yaml
+   - name: Type check
+     run: pnpm tsc --noEmit
+   ```
+
+### CI Environment
+
+- **Node.js**: Latest LTS version
+- **pnpm**: Latest version
+- **Docker**: Available in GitHub Actions runners
+- **Timeout**: 20 minutes for integration tests
+
+## Best Practices
+
+### 1. Test Isolation
+
+- Each test should be independent
+- Use `beforeEach` for test-specific setup
+- Clean up resources in `afterEach`/`afterAll`
+
+### 2. Meaningful Assertions
+
+```typescript
+// Bad - too vague
+expect(result).toBeTruthy();
+
+// Good - specific expectations
+expect(result.rows).toHaveLength(3);
+expect(result.rows[0]).toHaveProperty('name', 'John Doe');
+```
+
+### 3. Test Names
+
+```typescript
+// Bad
+it('test 1', () => { });
+
+// Good
+it('should return all users when no filter is provided', () => { });
+it('should throw error when connection string is invalid', () => { });
+```
+
+### 4. Async Handling
+
+```typescript
+// Use async/await for better error messages
+it('should connect to database', async () => {
+  await expect(connector.connect(dsn)).resolves.not.toThrow();
+});
+```
+
+### 5. Error Testing
+
+```typescript
+// Test both success and failure cases
+it('should handle invalid SQL gracefully', async () => {
+  await expect(
+    connector.executeSQL('INVALID SQL', {})
+  ).rejects.toThrow(/syntax error/);
+});
+```
+
+## Next Steps
+
+- [Building Connectors](/development/building-connectors) - Implement and test new database support
+- [Architecture](/development/architecture) - Understand the testing infrastructure
+- [Development Overview](/development/overview) - Contributing guidelines

@@ -1,0 +1,510 @@
+---
+title: MariaDB Connector
+description: Connect DBHub to MariaDB databases with MySQL compatibility and enhanced features
+---
+
+The MariaDB connector provides comprehensive support for MariaDB databases, offering MySQL compatibility while leveraging MariaDB-specific optimizations and features.
+
+## DSN Format
+
+MariaDB connection strings use the `mariadb://` protocol:
+
+```
+mariadb://[username[:password]@]host[:port]/database[?options]
+```
+
+### Basic Examples
+
+```bash
+# Standard connection
+mariadb://root:password@localhost:3306/mydb
+
+# With SSL enabled
+mariadb://user:pass@db.example.com:3306/production?sslmode=require
+
+# Custom port
+mariadb://user:pass@localhost:3307/mydb
+```
+
+## Connection Options
+
+### SSL/TLS Modes
+
+MariaDB supports SSL configuration via the `sslmode` query parameter:
+
+```bash
+# No SSL (development only)
+mariadb://user:pass@localhost:3306/db?sslmode=disable
+
+# SSL without certificate verification (recommended for most use cases)
+mariadb://user:pass@host:3306/db?sslmode=require
+
+# SSL with certificate verification
+mariadb://user:pass@host:3306/db
+```
+
+**Implementation**: See src/connectors/mariadb/index.ts:63-71
+
+### Timeouts
+
+Configure connection and query timeouts via TOML:
+
+```toml
+[[sources]]
+id = "mariadb_db"
+dsn = "mariadb://user:pass@host:3306/db"
+connection_timeout = 30  # Seconds to establish connection
+query_timeout = 60       # Seconds for query execution
+```
+
+The MariaDB connector converts these to milliseconds for the `mariadb` library (src/connectors/mariadb/index.ts:53-58).
+
+### AWS RDS IAM Authentication
+
+The connector automatically detects AWS IAM authentication tokens:
+
+```bash
+# IAM token contains "X-Amz-Credential" - detected automatically
+mariadb://dbuser:TOKEN_CONTAINING_X-Amz-Credential@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:76-84
+
+When an IAM token is detected:
+1. Automatically enables SSL (required for IAM authentication)
+2. Sets `rejectUnauthorized: false` for RDS certificates
+
+Note: MariaDB connector includes `mysql_clear_password` in default permitted plugins, so no additional configuration is needed.
+
+## Supported Features
+
+### Schemas (Databases)
+
+In MariaDB, "schema" and "database" are synonymous (MySQL-compatible behavior). List all databases:
+
+```sql
+SELECT SCHEMA_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA
+ORDER BY SCHEMA_NAME;
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:148-166
+
+### Tables and Views
+
+Get tables in a database:
+
+```typescript
+// Current database (from connection)
+await connector.getTables();
+
+// Specific database
+await connector.getTables('mydatabase');
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:168-197
+
+If no schema is provided, uses `DATABASE()` function to get the current active database.
+
+### Table Schema with Comments
+
+MariaDB supports column comments (MySQL-compatible):
+
+```sql
+CREATE TABLE users (
+  email VARCHAR(255) NOT NULL COMMENT 'User email address'
+);
+```
+
+The connector retrieves these comments (src/connectors/mariadb/index.ts:305-344):
+
+```typescript
+const schema = await connector.getTableSchema('users');
+// Returns: [
+//   {
+//     column_name: 'email',
+//     data_type: 'varchar',
+//     is_nullable: 'NO',
+//     column_default: null,
+//     description: 'User email address'
+//   }
+// ]
+```
+
+### Indexes
+
+MariaDB indexes include:
+- Primary keys (`is_primary: true`, index name is `PRIMARY`)
+- Unique indexes (`is_unique: true`)
+- Multi-column indexes
+- Full-text indexes
+- Spatial indexes
+
+**Implementation**: src/connectors/mariadb/index.ts:228-303
+
+```typescript
+const indexes = await connector.getTableIndexes('users');
+// Returns: [
+//   {
+//     index_name: 'PRIMARY',
+//     column_names: ['id'],
+//     is_unique: true,
+//     is_primary: true
+//   },
+//   {
+//     index_name: 'idx_email',
+//     column_names: ['email'],
+//     is_unique: true,
+//     is_primary: false
+//   }
+// ]
+```
+
+### Stored Procedures and Functions
+
+MariaDB supports both stored procedures and functions:
+
+```typescript
+// Get all routines
+await connector.getStoredProcedures('mydatabase');
+
+// Only functions
+await connector.getStoredProcedures('mydatabase', 'function');
+
+// Only procedures
+await connector.getStoredProcedures('mydatabase', 'procedure');
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:374-411
+
+Get procedure details including definition:
+
+```typescript
+const proc = await connector.getStoredProcedureDetail('my_procedure', 'mydatabase');
+// Returns: {
+//   procedure_name: 'my_procedure',
+//   procedure_type: 'procedure',
+//   language: 'sql',
+//   parameter_list: 'user_id IN int',
+//   definition: 'CREATE PROCEDURE...'
+// }
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:413-534
+
+The connector attempts multiple methods to retrieve procedure definitions:
+1. `SHOW CREATE PROCEDURE` / `SHOW CREATE FUNCTION`
+2. `INFORMATION_SCHEMA.ROUTINES.ROUTINE_DEFINITION`
+3. `INFORMATION_SCHEMA.ROUTINES.ROUTINE_BODY`
+
+### Table Comments
+
+Retrieve table-level comments:
+
+```sql
+CREATE TABLE users (
+  id INT PRIMARY KEY
+) COMMENT='Application user accounts';
+```
+
+```typescript
+const comment = await connector.getTableComment('users');
+// Returns: 'Application user accounts'
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:346-372
+
+## Query Execution
+
+### Parameterized Queries
+
+MariaDB uses `?` placeholders for parameters:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM users WHERE email = ? AND active = ?",
+  { maxRows: 100 },
+  ['user@example.com', true]
+);
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:569-579
+
+### Multi-Statement Support
+
+MariaDB has native multi-statement support enabled by default:
+
+```typescript
+await connector.executeSQL(`
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+  SELECT * FROM accounts WHERE id IN (1, 2);
+`, { maxRows: undefined });
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:52 (multipleStatements: true)
+
+Results from all statements are collected and returned:
+- SELECT results are aggregated into `rows`
+- INSERT/UPDATE/DELETE counts are summed in `rowCount`
+
+**Result parsing**: src/connectors/mariadb/index.ts:584-586
+
+### Session Consistency
+
+The connector uses dedicated connections from the pool for session consistency:
+
+```typescript
+// Each executeSQL gets a dedicated connection
+// This ensures LAST_INSERT_ID() and session variables work correctly
+await connector.executeSQL(
+  "INSERT INTO users (name) VALUES ('Alice'); SELECT LAST_INSERT_ID();",
+  {}
+);
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:549 (getConnection)
+
+### Row Limiting
+
+Applies database-native LIMIT clause for efficiency:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+// Executes: SELECT * FROM large_table LIMIT 100
+```
+
+**Implementation**: src/connectors/mariadb/index.ts:552-565
+
+## MariaDB vs MySQL
+
+While MariaDB maintains MySQL compatibility, it offers several enhancements:
+
+### Performance
+- **Aria storage engine**: Crash-safe MyISAM replacement
+- **Better query optimizer**: More advanced optimization strategies
+- **Thread pool**: Improved handling of concurrent connections
+
+### Features
+- **Temporal tables**: System-versioned tables for historical data
+- **JSON functions**: Enhanced JSON support
+- **Sequences**: Auto-increment alternative with more control
+- **Window functions**: Available in earlier versions than MySQL
+
+### Compatibility
+- Protocol-compatible with MySQL clients
+- Most MySQL queries work without modification
+- Uses same `INFORMATION_SCHEMA` structure
+
+## Common Scenarios
+
+### Connect to Local MariaDB
+
+```bash
+# Environment variable
+export DSN="mariadb://root:password@localhost:3306/mydb"
+
+# Or in TOML
+[[sources]]
+id = "local"
+dsn = "mariadb://root:password@localhost:3306/mydb"
+```
+
+### Connect to AWS RDS MariaDB
+
+**Option 1: Standard Authentication**
+
+```toml
+[[sources]]
+id = "rds_mariadb"
+dsn = "mariadb://admin:password@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production?sslmode=require"
+connection_timeout = 30
+```
+
+**Option 2: IAM Authentication**
+
+```bash
+# Generate IAM token
+TOKEN=$(aws rds generate-db-auth-token \
+  --hostname mydb.abc123.us-east-1.rds.amazonaws.com \
+  --port 3306 \
+  --username dbuser \
+  --region us-east-1)
+
+# Use token in DSN
+export DSN="mariadb://dbuser:$TOKEN@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production"
+```
+
+### Connect Through SSH Tunnel
+
+```toml
+[[sources]]
+id = "remote_mariadb"
+dsn = "mariadb://dbuser:dbpass@internal-db:3306/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+```
+
+See [SSH Tunnels](/connectors/ssh-tunnels) for details.
+
+### Work with Multiple Databases
+
+```toml
+[[sources]]
+id = "db1"
+dsn = "mariadb://user:pass@localhost:3306/database1"
+
+[[sources]]
+id = "db2"
+dsn = "mariadb://user:pass@localhost:3306/database2"
+```
+
+## MariaDB-Specific SQL Examples
+
+### Temporal Tables (System Versioning)
+
+```sql
+-- Create temporal table
+CREATE TABLE users (
+  id INT PRIMARY KEY,
+  name VARCHAR(100),
+  email VARCHAR(255)
+) WITH SYSTEM VERSIONING;
+
+-- Query historical data
+SELECT * FROM users FOR SYSTEM_TIME AS OF TIMESTAMP '2024-01-01 00:00:00';
+
+-- Get all versions of a record
+SELECT * FROM users FOR SYSTEM_TIME ALL WHERE id = 123;
+```
+
+### JSON Functions
+
+```sql
+-- MariaDB JSON functions
+SELECT 
+  JSON_VALUE(data, '$.name') as name,
+  JSON_QUERY(data, '$.tags') as tags
+FROM events
+WHERE JSON_EXISTS(data, '$.type');
+```
+
+### Sequences
+
+```sql
+-- Create sequence
+CREATE SEQUENCE user_id_seq START WITH 1000 INCREMENT BY 1;
+
+-- Use in INSERT
+INSERT INTO users (id, name) VALUES (NEXT VALUE FOR user_id_seq, 'Alice');
+
+-- Get current value
+SELECT LASTVAL(user_id_seq);
+```
+
+### Window Functions
+
+```sql
+SELECT 
+  date,
+  amount,
+  SUM(amount) OVER (ORDER BY date) as running_total,
+  RANK() OVER (PARTITION BY category ORDER BY amount DESC) as rank_in_category
+FROM transactions;
+```
+
+### CTEs with Recursive Queries
+
+```sql
+WITH RECURSIVE org_chart AS (
+  SELECT id, name, manager_id, 1 as level
+  FROM employees
+  WHERE manager_id IS NULL
+  
+  UNION ALL
+  
+  SELECT e.id, e.name, e.manager_id, oc.level + 1
+  FROM employees e
+  JOIN org_chart oc ON e.manager_id = oc.id
+)
+SELECT * FROM org_chart ORDER BY level, name;
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error**: `connect ECONNREFUSED 127.0.0.1:3306`
+
+**Solutions**:
+1. Verify MariaDB is running: `systemctl status mariadb`
+2. Check bind-address in `/etc/mysql/mariadb.conf.d/50-server.cnf`
+3. Verify firewall rules
+4. Test with mariadb client: `mariadb -h localhost -u user -p`
+
+### Authentication Failed
+
+**Error**: `Access denied for user 'username'@'host'`
+
+**Solutions**:
+1. Verify username and password
+2. Check user privileges:
+   ```sql
+   SELECT user, host FROM mysql.user WHERE user = 'username';
+   SHOW GRANTS FOR 'username'@'host';
+   ```
+3. Grant access if needed:
+   ```sql
+   GRANT ALL PRIVILEGES ON database.* TO 'username'@'%' IDENTIFIED BY 'password';
+   FLUSH PRIVILEGES;
+   ```
+
+### SSL Connection Required
+
+**Error**: `SSL connection error`
+
+**Solution**: Add `?sslmode=require` to your DSN:
+```bash
+mariadb://user:pass@host:3306/db?sslmode=require
+```
+
+### Plugin Not Loaded
+
+**Error**: `Plugin 'auth_plugin' is not loaded`
+
+**Solutions**:
+1. Use standard authentication:
+   ```sql
+   ALTER USER 'username'@'%' IDENTIFIED VIA mysql_native_password USING PASSWORD('password');
+   ```
+2. Or install required plugin in MariaDB configuration
+
+### Database Not Selected
+
+**Error**: `No database selected`
+
+**Solutions**:
+1. Specify database in DSN: `mariadb://user:pass@host:3306/mydb`
+2. Or use fully qualified table names: `database.table`
+
+## Performance Tips
+
+1. **Use connection pooling** (enabled by default in connector)
+2. **Use Aria storage engine** for better crash recovery than MyISAM
+3. **Enable thread pool** for high-concurrency workloads
+4. **Use EXPLAIN** to analyze query performance
+5. **Create appropriate indexes** for frequently queried columns
+6. **Use prepared statements** via parameterized queries
+7. **Consider temporal tables** for audit trails instead of trigger-based solutions
+8. **Use sequences** instead of AUTO_INCREMENT for better control
+
+## Next Steps
+
+- [Configure multi-database connections](/config/toml)
+- [Set up SSH tunneling](/connectors/ssh-tunnels)
+- [Compare with MySQL connector](/connectors/mysql)
+- [Explore other connectors](/connectors/overview)

@@ -1,0 +1,927 @@
+---
+title: Troubleshooting
+description: Common issues and solutions for DBHub connection and configuration problems
+---
+
+## Connection Issues
+
+### DSN Format Errors
+
+**Symptom**: `Invalid DSN format` error on startup
+
+**Common mistakes**:
+
+```bash
+# ❌ Missing protocol
+user:password@localhost:5432/dbname
+
+# ❌ Wrong protocol
+postgresql://user:password@localhost:5432/dbname  # Should be "postgres://"
+
+# ✅ Correct format
+postgres://user:password@localhost:5432/dbname
+```
+
+**Database-specific formats** (from CLAUDE.md:142-150):
+
+```bash
+# PostgreSQL
+postgres://user:password@localhost:5432/dbname?sslmode=disable
+
+# MySQL
+mysql://user:password@localhost:3306/dbname
+
+# MariaDB
+mariadb://user:password@localhost:3306/dbname
+
+# SQL Server
+sqlserver://user:password@localhost:1433/dbname
+
+# SQL Server (named instance)
+sqlserver://user:password@localhost:1433/dbname?instanceName=SQLEXPRESS
+
+# SQLite (file)
+sqlite:///path/to/database.db
+
+# SQLite (memory)
+sqlite:///:memory:
+```
+
+**Special characters in passwords**:
+
+From .env.example:13-19, use individual parameters for complex passwords:
+
+```toml
+# ❌ Breaks DSN parsing
+dsn = "postgres://user:p@ss:w0rd!@localhost:5432/db"
+
+# ✅ Use individual parameters
+[[sources]]
+id = "my_db"
+type = "postgres"
+host = "localhost"
+port = 5432
+database = "mydb"
+user = "myuser"
+password = "p@ss:w0rd!"  # Special characters OK here
+```
+
+### Authentication Failures
+
+**PostgreSQL**: `password authentication failed for user "username"`
+
+```bash
+# Check PostgreSQL user exists and has correct password
+psql -U username -d dbname -h localhost
+
+# Verify pg_hba.conf allows password authentication
+# Look for: host all all 127.0.0.1/32 md5
+```
+
+**MySQL/MariaDB**: `Access denied for user 'username'@'host'`
+
+```sql
+-- Verify user has access from connection host
+SELECT user, host FROM mysql.user WHERE user = 'username';
+
+-- Grant access if needed
+GRANT ALL PRIVILEGES ON dbname.* TO 'username'@'%' IDENTIFIED BY 'password';
+FLUSH PRIVILEGES;
+```
+
+**SQL Server**: `Login failed for user 'username'`
+
+```sql
+-- Check SQL Server authentication mode (must be Mixed Mode)
+-- SSMS → Server Properties → Security → SQL Server and Windows Authentication mode
+
+-- Verify user exists
+SELECT name FROM sys.sql_logins WHERE name = 'username';
+
+-- Create user if needed
+CREATE LOGIN username WITH PASSWORD = 'password';
+USE dbname;
+CREATE USER username FOR LOGIN username;
+ALTER ROLE db_datareader ADD MEMBER username;
+```
+
+### SSL/TLS Issues
+
+**Error**: `SSL connection required` or `SSL error`
+
+**Solutions**:
+
+```toml
+# Disable SSL for local development
+[[sources]]
+id = "local_db"
+dsn = "postgres://user:pass@localhost:5432/db?sslmode=disable"
+
+# Require SSL without cert verification (staging/prod)
+[[sources]]
+id = "prod_db"
+dsn = "postgres://user:pass@prod.example.com:5432/db?sslmode=require"
+```
+
+**PostgreSQL SSL modes** (from src/connectors/postgres/index.ts:56-66):
+- `sslmode=disable`: No SSL
+- `sslmode=require`: SSL without certificate verification
+- Default (no parameter): SSL with certificate verification
+
+**MySQL/MariaDB SSL**:
+
+```toml
+# Disable SSL
+dsn = "mysql://user:pass@localhost:3306/db?ssl=false"
+
+# Require SSL
+dsn = "mysql://user:pass@prod.example.com:3306/db?ssl=true"
+```
+
+### Connection Timeouts
+
+**Error**: `Connection timeout` or `Could not connect to database`
+
+**Solutions**:
+
+```toml
+# Increase connection timeout for slow networks
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:pass@remote.example.com:5432/db"
+connection_timeout = 60  # Default is database-specific (often 10-30s)
+```
+
+**Check network connectivity**:
+
+```bash
+# Test database port is reachable
+telnet db-host.example.com 5432
+# or
+nc -zv db-host.example.com 5432
+
+# Check firewall rules
+# Ensure port 5432 (PostgreSQL) / 3306 (MySQL) / 1433 (SQL Server) is open
+```
+
+## Debugging with Workbench
+
+### Enable HTTP Transport
+
+**Start DBHub with workbench**:
+
+```bash
+# Using npx
+npx @bytebase/dbhub --transport http --port 8080 --dsn "postgres://user:pass@localhost:5432/db"
+
+# Using pnpm (development)
+pnpm dev -- --transport http --port 8080
+
+# With TOML config
+npx @bytebase/dbhub --transport http --port 8080 --config dbhub.toml
+```
+
+**Access workbench**: Open browser to `http://localhost:8080`
+
+### Workbench Features
+
+1. **Test SQL queries** - Validate syntax before using in Claude
+2. **Inspect results** - See formatted output
+3. **View request traces** - Debug tool execution
+4. **Test custom tools** - Execute tools with parameters
+5. **Multi-database routing** - Test source_id parameter
+
+### Testing Queries in Workbench
+
+```sql
+-- Test basic connectivity
+SELECT version();
+SELECT current_database();
+
+-- Test schema access
+SELECT schema_name FROM information_schema.schemata;
+
+-- Test table access
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
+```
+
+## MCP Client Integration
+
+### Claude Desktop Configuration
+
+**Config file location**:
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+**Basic configuration**:
+
+```json
+{
+  "mcpServers": {
+    "dbhub": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub@latest",
+        "--dsn",
+        "postgres://user:password@localhost:5432/mydb"
+      ]
+    }
+  }
+}
+```
+
+**With TOML config**:
+
+```json
+{
+  "mcpServers": {
+    "dbhub": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@bytebase/dbhub@latest",
+        "--config",
+        "/absolute/path/to/dbhub.toml"
+      ]
+    }
+  }
+}
+```
+
+**Important**: Use absolute paths, not `~` or relative paths in Claude Desktop config.
+
+### Stdio Transport Issues
+
+**Symptom**: Claude Desktop shows "MCP server not responding"
+
+**Check**:
+1. MCP server is using `stdio` transport (default)
+2. Command is executable (`npx` should be in PATH)
+3. No syntax errors in `claude_desktop_config.json`
+4. Restart Claude Desktop after config changes
+
+**Debug**:
+
+```bash
+# Test command manually
+npx -y @bytebase/dbhub@latest --dsn "postgres://user:pass@localhost:5432/db"
+
+# Should start and show:
+# DBHub MCP Server v1.x.x
+# Connected to database sources: ...
+```
+
+**Check Claude Desktop logs**:
+- macOS: `~/Library/Logs/Claude/`
+- Windows: `%APPDATA%\Claude\logs\`
+- Linux: `~/.config/Claude/logs/`
+
+### Environment Variables in Claude Desktop
+
+**Option 1: Inline in config** (not recommended for secrets)
+
+```json
+{
+  "mcpServers": {
+    "dbhub": {
+      "command": "npx",
+      "args": ["-y", "@bytebase/dbhub@latest"],
+      "env": {
+        "DSN": "postgres://user:password@localhost:5432/db"
+      }
+    }
+  }
+}
+```
+
+**Option 2: Shell wrapper** (recommended)
+
+Create `~/bin/dbhub-wrapper.sh`:
+
+```bash
+#!/bin/bash
+source ~/.dbhub_credentials  # Contains: export DSN="postgres://..."
+npx -y @bytebase/dbhub@latest
+```
+
+```bash
+chmod +x ~/bin/dbhub-wrapper.sh
+```
+
+```json
+{
+  "mcpServers": {
+    "dbhub": {
+      "command": "/Users/username/bin/dbhub-wrapper.sh",
+      "args": []
+    }
+  }
+}
+```
+
+## SSH Tunnel Issues
+
+### SSH Key Permissions
+
+**Error**: `Permission denied (publickey)` or `Bad permissions`
+
+**Fix permissions**:
+
+```bash
+# SSH private key must be readable only by owner
+chmod 600 ~/.ssh/id_ed25519
+chmod 600 ~/.ssh/id_rsa
+
+# SSH directory should be 700
+chmod 700 ~/.ssh
+
+# Public keys should be 644
+chmod 644 ~/.ssh/id_ed25519.pub
+chmod 644 ~/.ssh/authorized_keys
+```
+
+### SSH Configuration Parsing
+
+**Using SSH config files** (from src/utils/ssh-config-parser.ts):
+
+```bash
+# ~/.ssh/config
+Host bastion
+    HostName bastion.company.com
+    User deploy
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519
+```
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://app:***@10.0.1.100:5432/app"
+ssh_host = "bastion"  # References SSH config
+ssh_user = "deploy"   # Can override SSH config
+```
+
+**Debug SSH connection**:
+
+```bash
+# Test SSH connection manually
+ssh -v deploy@bastion.company.com
+
+# Test with specific key
+ssh -i ~/.ssh/id_ed25519 deploy@bastion.company.com
+
+# Test port forwarding
+ssh -L 5433:10.0.1.100:5432 deploy@bastion.company.com
+# Then test: psql -h localhost -p 5433 -U app -d app
+```
+
+### SSH Tunnel Connection Failures
+
+**Error**: `SSH connection error: connect ECONNREFUSED`
+
+**Check**:
+1. SSH server is running on bastion
+2. Port 22 (or custom SSH port) is open
+3. Firewall allows SSH connections
+4. SSH user exists on bastion
+
+**Error**: `SSH forward error: connect ECONNREFUSED`
+
+**Check**:
+1. Database server is reachable from bastion
+2. Database port (5432, 3306, 1433) is open from bastion to database
+3. Database is listening on specified IP (not just 127.0.0.1)
+
+```bash
+# On bastion host, test database connectivity
+telnet 10.0.1.100 5432
+# or
+nc -zv 10.0.1.100 5432
+```
+
+### ProxyJump Issues
+
+**Error**: `SSH connection error (jump host 1)` or `SSH connection error (jump host 2)`
+
+From src/utils/ssh-tunnel.ts:70-138, connections fail sequentially:
+
+```toml
+# Check each jump host individually
+[[sources]]
+id = "test_jump1"
+dsn = "postgres://user:pass@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"  # Test first hop only
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+
+# Then add second hop
+[[sources]]
+id = "test_jump2"
+dsn = "postgres://user:pass@10.0.1.100:5432/app"
+ssh_host = "jump2.internal"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+ssh_proxy_jump = "bastion.company.com"  # First hop
+```
+
+**Verify each hop manually**:
+
+```bash
+# Test first jump
+ssh deploy@bastion.company.com
+
+# Test second jump from first
+ssh -J deploy@bastion.company.com deploy@jump2.internal
+
+# Test full chain
+ssh -J deploy@bastion.company.com,deploy@jump2.internal deploy@internal-server.company.com
+```
+
+## Database-Specific Issues
+
+### PostgreSQL Schema Access
+
+**Error**: `relation "table_name" does not exist`
+
+**Cause**: Table is in a non-public schema
+
+**Solution 1: Set search_path in TOML** (from src/types/config.ts:54)
+
+```toml
+[[sources]]
+id = "app_db"
+dsn = "postgres://user:pass@localhost:5432/myapp"
+search_path = "myschema,public"  # Comma-separated, first is default
+```
+
+**Solution 2: Use fully qualified table names**
+
+```sql
+-- Instead of
+SELECT * FROM users;
+
+-- Use
+SELECT * FROM myschema.users;
+```
+
+**Solution 3: Set schema in session**
+
+```sql
+SET search_path TO myschema, public;
+SELECT * FROM users;  -- Now works
+```
+
+### SQL Server Named Instances
+
+**Error**: `Failed to connect to server`
+
+**Solution**: Specify instance name in DSN (from CLAUDE.md:147)
+
+```toml
+# ❌ Missing instance name
+dsn = "sqlserver://sa:password@localhost:1433/mydb"
+
+# ✅ With instance name
+dsn = "sqlserver://sa:password@localhost:1433/mydb?instanceName=SQLEXPRESS"
+
+# Or using individual parameters
+[[sources]]
+id = "local_sqlserver"
+type = "sqlserver"
+host = "localhost"
+port = 1433
+database = "mydb"
+user = "sa"
+password = "YourPassword"
+instanceName = "SQLEXPRESS"
+```
+
+### SQL Server Windows Authentication
+
+**Error**: `Login failed for user`
+
+**Solution**: Use NTLM authentication (from dbhub.toml.example:115-130)
+
+```toml
+[[sources]]
+id = "corp_sqlserver"
+type = "sqlserver"
+host = "sqlserver.corp.local"
+port = 1433
+database = "app_db"
+user = "jsmith"  # Windows username (without domain prefix)
+password = "password"
+authentication = "ntlm"  # Required for Windows auth
+domain = "CORP"  # Windows domain
+```
+
+### SQLite File Path Issues
+
+**Error**: `unable to open database file`
+
+**Check**:
+
+```bash
+# Verify file exists
+ls -l /path/to/database.db
+
+# Check permissions
+chmod 644 /path/to/database.db
+
+# Verify directory is writable (SQLite needs to create temp files)
+chmod 755 /path/to/
+```
+
+**Absolute vs relative paths**:
+
+```toml
+# ❌ Relative path (depends on working directory)
+dsn = "sqlite:///database.db"
+
+# ✅ Absolute path
+dsn = "sqlite:////absolute/path/to/database.db"
+
+# ✅ Home directory expansion
+dsn = "sqlite:////Users/username/data/database.db"
+```
+
+**Note**: SQLite DSN uses three slashes (`sqlite:///`) followed by the path.
+
+### MySQL/MariaDB Connection Issues
+
+**Error**: `ER_NOT_SUPPORTED_AUTH_MODE: Client does not support authentication protocol`
+
+**Cause**: MySQL 8.0 uses `caching_sha2_password` by default
+
+**Solution**: Change user authentication plugin
+
+```sql
+ALTER USER 'username'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
+FLUSH PRIVILEGES;
+```
+
+**Error**: `ECONNREFUSED` on MySQL connection
+
+**Check**:
+
+```bash
+# Verify MySQL is listening on network interface
+sudo netstat -tlnp | grep 3306
+
+# Check bind-address in my.cnf (should be 0.0.0.0 or specific IP, not 127.0.0.1)
+# /etc/mysql/my.cnf or /etc/my.cnf
+[mysqld]
+bind-address = 0.0.0.0
+
+# Restart MySQL after changes
+sudo systemctl restart mysql
+```
+
+## Performance Issues
+
+### Query Timeouts
+
+**Error**: `Query execution timeout` or `canceling statement due to user request`
+
+**Solution**: Increase query timeout (from src/types/config.ts:51)
+
+```toml
+[[sources]]
+id = "warehouse_db"
+dsn = "postgres://analyst:***@warehouse.example.com:5432/analytics"
+query_timeout = 120  # Increase from default (often 30s)
+```
+
+**Optimize slow queries**:
+
+```sql
+-- Use EXPLAIN to analyze query plan
+EXPLAIN ANALYZE SELECT * FROM large_table WHERE condition;
+
+-- Add indexes for frequently filtered columns
+CREATE INDEX idx_column_name ON table_name(column_name);
+
+-- Limit results for large tables
+SELECT * FROM large_table LIMIT 1000;
+```
+
+### Large Result Sets
+
+**Error**: Memory issues or slow responses with large datasets
+
+**Solution 1: Set max_rows limit**
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "warehouse_db"
+max_rows = 1000  # Hard limit on returned rows
+```
+
+**Solution 2: Use pagination in queries**
+
+```sql
+-- Instead of
+SELECT * FROM large_table;
+
+-- Use LIMIT and OFFSET
+SELECT * FROM large_table ORDER BY id LIMIT 100 OFFSET 0;
+SELECT * FROM large_table ORDER BY id LIMIT 100 OFFSET 100;
+```
+
+**Solution 3: Use aggregation**
+
+```sql
+-- Instead of returning all rows
+SELECT * FROM sales;
+
+-- Aggregate first
+SELECT date, SUM(amount) as total FROM sales GROUP BY date ORDER BY date DESC LIMIT 30;
+```
+
+## Multi-Database Routing
+
+### source_id Parameter Usage
+
+**Error**: `Source 'source_id' not found`
+
+**Check TOML configuration**:
+
+```toml
+# Verify source exists with exact ID
+[[sources]]
+id = "prod_db"  # Must match exactly (case-sensitive)
+dsn = "postgres://..."
+
+# Available sources listed in startup output:
+# Connected to database sources: prod_db, staging_db, local_dev
+```
+
+**Use correct tool name**:
+
+From src/tools/execute-sql.ts:89, tools are named per source:
+
+```typescript
+// Default source (first in TOML)
+execute_sql({ sql: "SELECT version()" })
+
+// Specific source
+execute_sql_prod_db({ sql: "SELECT version()" })
+execute_sql_staging_db({ sql: "SELECT version()" })
+```
+
+### Lazy Source Connection Errors
+
+**Error**: `Source 'lazy_source' not connected`
+
+**Expected**: Lazy sources connect on first use (from src/connectors/manager.ts:80-110)
+
+**Debug**:
+
+```bash
+# Check startup log
+# Should show: "- lazy_source: postgres://... (lazy, will connect on first use)"
+
+# First query to lazy source triggers connection
+# Subsequent queries use existing connection
+```
+
+**If connection fails on first use**:
+1. Check DSN is valid
+2. Check database is reachable
+3. Check SSH tunnel config (if used)
+4. Review connection_timeout setting
+
+## Error Messages and Meanings
+
+### Common Error Codes
+
+**`READONLY_VIOLATION`** (from src/tools/execute-sql.ts:61)
+- Query contains non-SELECT operations in readonly mode
+- Check allowed keywords for your database type
+- Solution: Use `readonly = false` or change query to SELECT-only
+
+**`SCHEMA_REQUIRED`** (from src/tools/search-objects.ts:528)
+- `table` parameter used without `schema` parameter
+- Solution: Add `schema` parameter when filtering by table
+
+**`SCHEMA_NOT_FOUND`** (from src/tools/search-objects.ts:543)
+- Specified schema does not exist in database
+- Solution: Check schema name spelling, verify schema exists
+
+**`INVALID_TABLE_FILTER`** (from src/tools/search-objects.ts:534)
+- `table` parameter only applies to columns and indexes
+- Solution: Remove `table` parameter for other object types
+
+**`EXECUTION_ERROR`** (from src/tools/execute-sql.ts:83)
+- General SQL execution failure
+- Check error message for database-specific details
+- Common causes: syntax error, permission denied, object not found
+
+**`SEARCH_ERROR`** (from src/tools/search-objects.ts:590)
+- Error during schema object search
+- Check error message for details
+- Common causes: permission denied, invalid pattern
+
+## Checking Logs and Request Traces
+
+### Startup Logs
+
+**Successful startup**:
+
+```
+ _____  ____  _   _       _
+|  __ \|  _ \| | | |     | |
+| |  | | |_) | |_| |_   _| |__
+| |  | |  _ <|  _  | | | | '_ \
+| |__| | |_) | | | | |_| | |_) |
+|_____/|____/|_| |_|\__,_|_.__/
+
+v1.x.x - Minimal Database MCP Server
+
+Connecting to 3 database source(s)...
+  - prod_db: postgres://user:********@prod.example.com:5432/app
+  - staging_db: postgres://user:********@staging.example.com:5432/app
+  - local_dev: postgres://postgres:********@localhost:5432/myapp (lazy, will connect on first use)
+SSH connection established: bastion.company.com:22
+SSH tunnel established: localhost:12345 → 10.0.1.100:5432
+
+┌───────────┬────────────┬────────────────────────────────────────────────┬──────────────┐
+│  Source   │    Type    │                  Connection                    │    Tools     │
+├───────────┼────────────┼────────────────────────────────────────────────┼──────────────┤
+│ prod_db   │ postgres   │ prod.example.com:5432/app                      │ 2            │
+│ staging   │ postgres   │ staging.example.com:5432/app                   │ 2            │
+└───────────┴────────────┴────────────────────────────────────────────────┴──────────────┘
+
+DBHub MCP Server started on stdio
+```
+
+### Request Traces in Workbench
+
+**Access traces**: Open workbench (`--transport http --port 8080`), navigate to "Requests" tab
+
+**Trace information includes**:
+- Timestamp
+- Source ID
+- Tool name
+- SQL query
+- Execution time
+- Success/failure status
+- Error message (if failed)
+
+**Example trace**:
+
+```json
+{
+  "timestamp": "2024-01-15T10:30:45.123Z",
+  "sourceId": "prod_db",
+  "toolName": "execute_sql",
+  "sql": "SELECT * FROM users LIMIT 10",
+  "executionTimeMs": 45,
+  "success": true,
+  "rowCount": 10
+}
+```
+
+## Testing with curl (HTTP Transport)
+
+### Basic MCP Request
+
+**Start DBHub with HTTP transport**:
+
+```bash
+npx @bytebase/dbhub --transport http --port 8080 --dsn "postgres://user:pass@localhost:5432/db"
+```
+
+**Test with curl**:
+
+```bash
+# List available tools
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "tools/list"
+  }'
+
+# Execute SQL
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
+    "method": "tools/call",
+    "params": {
+      "name": "execute_sql",
+      "arguments": {
+        "sql": "SELECT version()"
+      }
+    }
+  }'
+
+# Search objects
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 3,
+    "method": "tools/call",
+    "params": {
+      "name": "search_objects",
+      "arguments": {
+        "object_type": "table",
+        "detail_level": "names"
+      }
+    }
+  }'
+```
+
+### Testing Multi-Database Routing
+
+```bash
+# Execute on default source (first in TOML)
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 4,
+    "method": "tools/call",
+    "params": {
+      "name": "execute_sql",
+      "arguments": {
+        "sql": "SELECT current_database()"
+      }
+    }
+  }'
+
+# Execute on specific source
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 5,
+    "method": "tools/call",
+    "params": {
+      "name": "execute_sql_prod_db",
+      "arguments": {
+        "sql": "SELECT current_database()"
+      }
+    }
+  }'
+```
+
+## Getting Help
+
+### Enable Debug Logging
+
+```bash
+# Set environment variable for verbose output
+DEBUG=* npx @bytebase/dbhub --dsn "..."
+
+# Or check stderr for error details
+npx @bytebase/dbhub --dsn "..." 2> dbhub-errors.log
+```
+
+### Gather Information for Bug Reports
+
+When reporting issues, include:
+
+1. **DBHub version**: Check startup banner or `package.json`
+2. **Database type and version**: `SELECT version()` output
+3. **Configuration**: TOML config (redact credentials) or command-line args
+4. **Error message**: Full error output from logs
+5. **Steps to reproduce**: Minimal example to trigger the issue
+6. **Environment**: OS, Node.js version (`node --version`)
+
+### Check Documentation
+
+- **Configuration**: https://dbhub.ai/config/toml
+- **Tools**: https://dbhub.ai/tools/execute-sql, https://dbhub.ai/tools/search-objects
+- **Workbench**: https://dbhub.ai/workbench/overview
+- **GitHub Issues**: https://github.com/bytebase/dbhub/issues
+
+### Common Solutions Summary
+
+| Issue | Quick Fix |
+|-------|----------|
+| DSN format error | Check protocol prefix (`postgres://`, not `postgresql://`) |
+| Authentication failure | Verify username/password, check database user grants |
+| SSL error | Add `?sslmode=disable` for local, `?sslmode=require` for prod |
+| Connection timeout | Increase `connection_timeout` in TOML |
+| Schema not found | Set `search_path` in TOML for PostgreSQL |
+| SSH permission denied | Fix key permissions: `chmod 600 ~/.ssh/id_*` |
+| Read-only violation | Set `readonly = false` or use SELECT queries only |
+| Query timeout | Increase `query_timeout` or optimize query |
+| Large result set | Set `max_rows` limit or use pagination |
+| Source not found | Check `id` in TOML matches exactly (case-sensitive) |
+
+### Contact and Support
+
+For issues not covered here:
+
+- **GitHub Issues**: https://github.com/bytebase/dbhub/issues
+- **Documentation**: https://dbhub.ai/
+- **Community**: Check existing issues for similar problems

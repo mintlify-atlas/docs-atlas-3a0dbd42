@@ -1,0 +1,429 @@
+---
+title: Environment Variables
+description: Configure DBHub using environment variables and .env files
+---
+
+Environment variables provide a convenient way to configure DBHub without command-line flags. This method is ideal for containerized deployments, CI/CD pipelines, and when you want to keep credentials separate from your code.
+
+## Configuration Methods
+
+DBHub supports two ways to provide database connection parameters via environment variables:
+
+1. **DSN string** (recommended) - Single connection string
+2. **Individual parameters** - Separate variables for each connection detail
+
+<Info>
+  Use individual parameters when your password contains special characters (`@`, `:`, `/`, `#`) that would break URL parsing in a DSN string.
+</Info>
+
+## .env File Loading
+
+DBHub automatically loads environment variables from `.env` files:
+
+**Development mode** (using `tsx` or `NODE_ENV=development`):
+1. Looks for `.env.local` first
+2. Falls back to `.env`
+
+**Production mode** (compiled build):
+1. Only loads `.env`
+
+<Tip>
+  Use `.env.local` for local development settings and add it to `.gitignore`. Commit `.env` as a template with empty/example values.
+</Tip>
+
+## Database Connection
+
+### Method 1: DSN Connection String
+
+The simplest approach - provide a single connection string:
+
+<ParamField path="DSN" type="string">
+  Complete database connection string in URL format.
+  
+  **Format:** `protocol://[user[:password]@]host[:port]/database[?options]`
+</ParamField>
+
+#### DSN Examples by Database Type
+
+<CodeGroup>
+
+```bash PostgreSQL
+# .env
+DSN=postgres://postgres:password@localhost:5432/myapp
+
+# With SSL
+DSN=postgres://user:pass@db.example.com:5432/prod?sslmode=require
+```
+
+```bash MySQL
+# .env
+DSN=mysql://root:mysql@localhost:3306/myapp
+
+# With SSL
+DSN=mysql://user:pass@db.example.com:3306/prod?sslmode=require
+```
+
+```bash MariaDB
+# .env
+DSN=mariadb://root:mariadb@localhost:3306/myapp
+```
+
+```bash SQL Server
+# .env
+DSN=sqlserver://sa:YourStrong@Pass@localhost:1433/myapp
+
+# Named instance
+DSN=sqlserver://user:pass@server:1433/db?instanceName=SQLEXPRESS
+
+# Windows/NTLM authentication
+DSN=sqlserver://user:pass@server:1433/db?authentication=ntlm&domain=CORP
+```
+
+```bash SQLite
+# .env
+# File-based
+DSN=sqlite:///path/to/database.db
+
+# In-memory
+DSN=sqlite:///:memory:
+
+# Home directory expansion
+DSN=sqlite:///~/data/myapp.db
+```
+
+</CodeGroup>
+
+### Method 2: Individual Connection Parameters
+
+When your password contains special characters, use individual parameters:
+
+<ParamField path="DB_TYPE" type="string" required>
+  Database type.
+  
+  **Options:** `postgres`, `mysql`, `mariadb`, `sqlserver`, `sqlite`
+</ParamField>
+
+<ParamField path="DB_HOST" type="string" required>
+  Database server hostname or IP address.
+  
+  Not required for SQLite.
+</ParamField>
+
+<ParamField path="DB_PORT" type="number">
+  Database server port number.
+  
+  **Defaults:**
+  - PostgreSQL: `5432`
+  - MySQL/MariaDB: `3306`
+  - SQL Server: `1433`
+  - SQLite: Not applicable
+</ParamField>
+
+<ParamField path="DB_USER" type="string" required>
+  Database username.
+  
+  Not required for SQLite.
+</ParamField>
+
+<ParamField path="DB_PASSWORD" type="string" required>
+  Database password. Can contain any special characters.
+  
+  Not required for SQLite or Azure AD authentication.
+</ParamField>
+
+<ParamField path="DB_NAME" type="string" required>
+  Database name.
+  
+  For SQLite, this is the file path to the database.
+</ParamField>
+
+#### Individual Parameters Examples
+
+<CodeGroup>
+
+```bash PostgreSQL
+# .env
+DB_TYPE=postgres
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=postgres
+DB_PASSWORD=my@password:with/special#chars
+DB_NAME=myapp
+```
+
+```bash MySQL
+# .env
+DB_TYPE=mysql
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=p@ss:word/123
+DB_NAME=myapp
+```
+
+```bash SQL Server
+# .env
+DB_TYPE=sqlserver
+DB_HOST=localhost
+DB_PORT=1433
+DB_USER=sa
+DB_PASSWORD=YourStrong@Passw0rd
+DB_NAME=myapp
+```
+
+```bash SQLite
+# .env
+DB_TYPE=sqlite
+DB_NAME=/path/to/database.db
+```
+
+</CodeGroup>
+
+<Warning>
+  When using individual parameters, you cannot specify SSL mode, named instances, or authentication methods. For these advanced options, use a [TOML configuration file](/config/toml) instead.
+</Warning>
+
+## Transport Configuration
+
+<ParamField path="TRANSPORT" type="string" default="stdio">
+  MCP server transport protocol.
+  
+  **Options:**
+  - `stdio` - Standard input/output (for Claude Desktop, Claude Code, Cursor)
+  - `http` - HTTP transport with JSON responses (for network clients)
+</ParamField>
+
+<ParamField path="PORT" type="number" default="8080">
+  HTTP server port. Only used when `TRANSPORT=http`.
+</ParamField>
+
+```bash
+# .env
+TRANSPORT=http
+PORT=3000
+```
+
+## SSH Tunnel Configuration
+
+Securely connect to databases through SSH bastion hosts:
+
+<ParamField path="SSH_HOST" type="string">
+  SSH server hostname or IP address. Can be an alias from `~/.ssh/config`.
+</ParamField>
+
+<ParamField path="SSH_PORT" type="number" default="22">
+  SSH server port number.
+</ParamField>
+
+<ParamField path="SSH_USER" type="string" required>
+  SSH username for authentication.
+</ParamField>
+
+<ParamField path="SSH_PASSWORD" type="string">
+  SSH password authentication. Use either this or `SSH_KEY`.
+</ParamField>
+
+<ParamField path="SSH_KEY" type="string">
+  Path to SSH private key file. Use either this or `SSH_PASSWORD`.
+  
+  Supports `~/` expansion.
+</ParamField>
+
+<ParamField path="SSH_PASSPHRASE" type="string">
+  Passphrase for encrypted SSH private key.
+</ParamField>
+
+<ParamField path="SSH_PROXY_JUMP" type="string">
+  Comma-separated list of jump hosts for multi-hop SSH connections.
+  
+  **Format:** `[user@]host[:port],[user@]host[:port],...`
+</ParamField>
+
+<ParamField path="SSH_KEEPALIVE_INTERVAL" type="number" default="0">
+  Seconds between SSH keepalive packets. Set to 0 to disable.
+</ParamField>
+
+<ParamField path="SSH_KEEPALIVE_COUNT_MAX" type="number" default="3">
+  Maximum number of missed keepalive responses before disconnecting.
+</ParamField>
+
+### SSH Examples
+
+<CodeGroup>
+
+```bash Password Authentication
+# .env
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=bastion.company.com
+SSH_PORT=22
+SSH_USER=deploy
+SSH_PASSWORD=secret
+```
+
+```bash Key Authentication
+# .env
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=bastion.company.com
+SSH_USER=deploy
+SSH_KEY=~/.ssh/id_ed25519
+```
+
+```bash Encrypted Key
+# .env
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=bastion.company.com
+SSH_USER=deploy
+SSH_KEY=~/.ssh/id_rsa
+SSH_PASSPHRASE=keypassword
+```
+
+```bash SSH Config Alias
+# .env
+# DBHub reads additional settings from ~/.ssh/config
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=prod-bastion
+```
+
+```bash Multi-Hop Connection
+# .env
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=internal-server
+SSH_USER=deploy
+SSH_KEY=~/.ssh/id_ed25519
+SSH_PROXY_JUMP=bastion.company.com,admin@jump2:2222
+```
+
+```bash With Keepalive
+# .env
+DSN=postgres://user:pass@10.0.1.100:5432/prod
+
+SSH_HOST=bastion.company.com
+SSH_USER=deploy
+SSH_KEY=~/.ssh/id_ed25519
+SSH_KEEPALIVE_INTERVAL=60
+SSH_KEEPALIVE_COUNT_MAX=3
+```
+
+</CodeGroup>
+
+## Complete .env Example
+
+A typical production setup:
+
+```bash
+# .env
+
+# Database connection
+DSN=postgres://app_user:secure_password@10.0.1.50:5432/myapp_prod?sslmode=require
+
+# SSH tunnel
+SSH_HOST=bastion.company.com
+SSH_USER=deploy
+SSH_KEY=~/.ssh/id_ed25519
+SSH_KEEPALIVE_INTERVAL=60
+
+# Server transport
+TRANSPORT=http
+PORT=8080
+```
+
+## .env Template
+
+Create a `.env.example` file in your repository as a template:
+
+```bash
+# .env.example
+
+# Database Connection
+# Method 1: Connection String (DSN)
+DSN=
+
+# Method 2: Individual Parameters (use when password has special characters)
+# DB_TYPE=postgres
+# DB_HOST=localhost
+# DB_PORT=5432
+# DB_USER=postgres
+# DB_PASSWORD=
+# DB_NAME=mydatabase
+
+# Transport Configuration
+TRANSPORT=stdio
+PORT=8080
+
+# SSH Tunnel (optional)
+# SSH_HOST=
+# SSH_PORT=22
+# SSH_USER=
+# SSH_PASSWORD=
+# SSH_KEY=~/.ssh/id_rsa
+# SSH_PASSPHRASE=
+```
+
+Developers copy this to `.env` and fill in their values:
+
+```bash
+cp .env.example .env
+```
+
+<Tip>
+  Add `.env` and `.env.local` to your `.gitignore` to prevent committing secrets.
+</Tip>
+
+## When to Use Environment Variables
+
+**Use environment variables when:**
+- Deploying in containers (Docker, Kubernetes)
+- Running in CI/CD pipelines
+- Managing a single database connection
+- Passwords contain special characters
+- You want environment-specific configs (dev/staging/prod)
+
+**Use TOML configuration when:**
+- Managing multiple databases
+- Need per-tool settings (readonly, max_rows)
+- Defining custom SQL tools
+- Advanced SSH tunnel configurations
+- Per-database timeouts or connection pooling
+
+See [TOML Configuration](/config/toml) for multi-database setups.
+
+## Configuration Priority
+
+Remember that environment variables have lower priority than command-line arguments:
+
+1. Command-line arguments (highest)
+2. TOML config file
+3. **Environment variables** ← You are here
+4. `.env` files (lowest)
+
+<Info>
+  Command-line flags will override environment variables. This is useful for temporary testing without modifying your `.env` file.
+</Info>
+
+## Deprecated Variables
+
+The following environment variables are no longer supported:
+
+<Warning>
+  **Removed in current version:**
+  - `READONLY` - Use TOML `[[tools]]` configuration instead
+  - `MAX_ROWS` - Use TOML `[[tools]]` configuration instead
+  
+  See [execute_sql tool configuration](/tools/execute-sql) for migration guidance.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Command-Line Flags" icon="terminal" href="/config/command-line">
+    Override settings with command-line arguments
+  </Card>
+  <Card title="TOML Configuration" icon="database" href="/config/toml">
+    Set up multiple databases with advanced options
+  </Card>
+</CardGroup>

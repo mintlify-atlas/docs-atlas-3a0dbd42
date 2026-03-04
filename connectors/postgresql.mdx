@@ -1,0 +1,465 @@
+---
+title: PostgreSQL Connector
+description: Connect DBHub to PostgreSQL databases with advanced features
+---
+
+The PostgreSQL connector provides comprehensive support for PostgreSQL databases, including schemas, stored procedures, full-text search, and JSON operations.
+
+## DSN Format
+
+PostgreSQL connection strings use the `postgres://` or `postgresql://` protocol:
+
+```
+postgres://[username[:password]@]host[:port]/database[?options]
+```
+
+### Basic Examples
+
+```bash
+# Standard connection
+postgres://postgres:password@localhost:5432/mydb
+
+# With SSL enabled
+postgres://user:pass@db.example.com:5432/production?sslmode=require
+
+# Custom port
+postgres://user:pass@localhost:5433/mydb
+```
+
+## Connection Options
+
+### SSL/TLS Modes
+
+PostgreSQL supports three SSL modes via the `sslmode` query parameter:
+
+```bash
+# No SSL (development only)
+postgres://user:pass@localhost:5432/db?sslmode=disable
+
+# SSL without certificate verification (recommended for most use cases)
+postgres://user:pass@host:5432/db?sslmode=require
+
+# SSL with certificate verification
+postgres://user:pass@host:5432/db?sslmode=verify-full
+```
+
+**Implementation**: See src/connectors/postgres/index.ts:56-67
+
+### Timeouts
+
+Configure connection and query timeouts via TOML:
+
+```toml
+[[sources]]
+id = "postgres_db"
+dsn = "postgres://user:pass@host:5432/db"
+connection_timeout = 30  # Seconds to establish connection
+query_timeout = 60       # Seconds for query execution
+```
+
+The PostgreSQL connector converts these to milliseconds for the `pg` library (src/connectors/postgres/index.ts:70-79).
+
+### Read-Only Mode
+
+PostgreSQL supports SDK-level read-only enforcement using `default_transaction_read_only`:
+
+```toml
+[[sources]]
+id = "readonly_pg"
+dsn = "postgres://user:pass@host:5432/db"
+readonly = true  # Sets default_transaction_read_only=on
+```
+
+**Implementation**: src/connectors/postgres/index.ts:134-136
+
+This prevents all write operations at the database session level, including:
+- INSERT, UPDATE, DELETE
+- CREATE, ALTER, DROP
+- TRUNCATE, COPY
+
+### Schema Search Path
+
+Configure the default schema search path:
+
+```toml
+[[sources]]
+id = "pg_app"
+dsn = "postgres://user:pass@host:5432/db"
+search_path = "myapp,public"  # First schema is default for discovery
+```
+
+**Implementation**: src/connectors/postgres/index.ts:139-148
+
+The first schema in the search path becomes the default for:
+- `getTables()` without schema parameter
+- `getTableSchema()` without schema parameter
+- `getStoredProcedures()` without schema parameter
+
+## Supported Features
+
+### Schemas
+
+PostgreSQL has full schema support. List all schemas:
+
+```sql
+SELECT schema_name 
+FROM information_schema.schemata 
+WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast')
+ORDER BY schema_name;
+```
+
+**Implementation**: src/connectors/postgres/index.ts:168-186
+
+Default schema: `public` (or first schema from `search_path` config)
+
+### Tables and Views
+
+Get tables in a schema:
+
+```typescript
+// Default schema (public or search_path[0])
+await connector.getTables();
+
+// Specific schema
+await connector.getTables('myschema');
+```
+
+**Implementation**: src/connectors/postgres/index.ts:188-212
+
+### Table Schema with Comments
+
+PostgreSQL supports column comments for documentation:
+
+```sql
+COMMENT ON COLUMN users.email IS 'User email address';
+```
+
+The connector retrieves these comments (src/connectors/postgres/index.ts:295-334):
+
+```typescript
+const schema = await connector.getTableSchema('users');
+// Returns: [
+//   {
+//     column_name: 'email',
+//     data_type: 'varchar',
+//     is_nullable: 'NO',
+//     column_default: null,
+//     description: 'User email address'
+//   }
+// ]
+```
+
+### Indexes
+
+PostgreSQL indexes include:
+- Primary keys (`is_primary: true`)
+- Unique indexes (`is_unique: true`)
+- Multi-column indexes
+- Partial indexes
+- Expression indexes
+
+**Implementation**: src/connectors/postgres/index.ts:241-293
+
+```typescript
+const indexes = await connector.getTableIndexes('users', 'public');
+// Returns: [
+//   {
+//     index_name: 'users_pkey',
+//     column_names: ['id'],
+//     is_unique: true,
+//     is_primary: true
+//   },
+//   {
+//     index_name: 'idx_users_email',
+//     column_names: ['email'],
+//     is_unique: true,
+//     is_primary: false
+//   }
+// ]
+```
+
+### Stored Procedures and Functions
+
+PostgreSQL distinguishes between procedures (`PROCEDURE`) and functions (`FUNCTION`):
+
+```typescript
+// Get all routines
+await connector.getStoredProcedures('public');
+
+// Only functions
+await connector.getStoredProcedures('public', 'function');
+
+// Only procedures
+await connector.getStoredProcedures('public', 'procedure');
+```
+
+**Implementation**: src/connectors/postgres/index.ts:399-434
+
+Get procedure details including definition:
+
+```typescript
+const proc = await connector.getStoredProcedureDetail('my_function', 'public');
+// Returns: {
+//   procedure_name: 'my_function',
+//   procedure_type: 'function',
+//   language: 'plpgsql',
+//   parameter_list: 'user_id IN integer',
+//   return_type: 'void',
+//   definition: 'CREATE OR REPLACE FUNCTION...'
+// }
+```
+
+**Implementation**: src/connectors/postgres/index.ts:436-526
+
+### Row Count Estimation
+
+For large tables, PostgreSQL provides fast row count estimates using `pg_class.reltuples`:
+
+```typescript
+const rowCount = await connector.getTableRowCount('large_table', 'public');
+// Fast estimate from catalog statistics
+```
+
+**Implementation**: src/connectors/postgres/index.ts:337-367
+
+This is much faster than `COUNT(*)` for large tables and provides reasonable accuracy after ANALYZE.
+
+### Table Comments
+
+Retrieve table-level comments:
+
+```sql
+COMMENT ON TABLE users IS 'Application user accounts';
+```
+
+```typescript
+const comment = await connector.getTableComment('users', 'public');
+// Returns: 'Application user accounts'
+```
+
+**Implementation**: src/connectors/postgres/index.ts:369-397
+
+## Query Execution
+
+### Parameterized Queries
+
+PostgreSQL uses `$1`, `$2`, etc. for parameters:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM users WHERE email = $1 AND active = $2",
+  { maxRows: 100 },
+  ['user@example.com', true]
+);
+```
+
+**Implementation**: src/connectors/postgres/index.ts:544-556
+
+Parameters are passed directly to the `pg` library for safe, prepared execution.
+
+### Multi-Statement Support
+
+PostgreSQL executes multiple statements within a transaction for consistency:
+
+```typescript
+await connector.executeSQL(`
+  BEGIN;
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+  COMMIT;
+`, { maxRows: undefined });
+```
+
+**Implementation**: src/connectors/postgres/index.ts:560-593
+
+If any statement fails, the transaction is rolled back automatically.
+
+### Row Limiting
+
+Applies database-native LIMIT clause for efficiency:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+// Executes: SELECT * FROM large_table LIMIT 100
+```
+
+## Common Scenarios
+
+### Connect to Local PostgreSQL
+
+```bash
+# Environment variable
+export DSN="postgres://postgres:password@localhost:5432/mydb"
+
+# Or in TOML
+[[sources]]
+id = "local"
+dsn = "postgres://postgres:password@localhost:5432/mydb"
+```
+
+### Connect to Cloud PostgreSQL (AWS RDS, Azure, GCP)
+
+```toml
+[[sources]]
+id = "cloud_pg"
+dsn = "postgres://username:password@my-db.abc123.us-east-1.rds.amazonaws.com:5432/production?sslmode=require"
+connection_timeout = 30
+query_timeout = 60
+```
+
+### Connect Through SSH Tunnel
+
+```toml
+[[sources]]
+id = "remote_pg"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+```
+
+See [SSH Tunnels](/connectors/ssh-tunnels) for details.
+
+### Use Multiple Schemas
+
+```toml
+[[sources]]
+id = "multi_schema"
+dsn = "postgres://user:pass@localhost:5432/db"
+search_path = "app_schema,audit_schema,public"
+```
+
+Queries can reference tables from any schema in the search path:
+
+```sql
+-- Uses search_path to find tables
+SELECT * FROM users;  -- Finds app_schema.users
+
+-- Explicit schema reference
+SELECT * FROM audit_schema.logs;
+```
+
+### Read-Only Analytics Connection
+
+```toml
+[[sources]]
+id = "analytics"
+dsn = "postgres://readonly_user:pass@replica.db.com:5432/warehouse"
+readonly = true  # Enforces read-only at session level
+query_timeout = 300  # 5 minutes for long analytics queries
+```
+
+## PostgreSQL-Specific SQL Examples
+
+### JSON Queries
+
+```sql
+-- Query JSONB columns
+SELECT data->>'name' as name, data->'tags' as tags
+FROM events
+WHERE data @> '{"type": "purchase"}'::jsonb;
+```
+
+### Full-Text Search
+
+```sql
+-- Using tsvector for full-text search
+SELECT title, ts_rank(search_vector, query) as rank
+FROM articles, to_tsquery('english', 'postgresql & database') query
+WHERE search_vector @@ query
+ORDER BY rank DESC;
+```
+
+### Window Functions
+
+```sql
+-- Calculate running totals
+SELECT 
+  date,
+  amount,
+  SUM(amount) OVER (ORDER BY date) as running_total
+FROM transactions
+ORDER BY date;
+```
+
+### CTEs (Common Table Expressions)
+
+```sql
+WITH recent_orders AS (
+  SELECT customer_id, COUNT(*) as order_count
+  FROM orders
+  WHERE created_at > NOW() - INTERVAL '30 days'
+  GROUP BY customer_id
+)
+SELECT c.name, ro.order_count
+FROM customers c
+JOIN recent_orders ro ON c.id = ro.customer_id
+WHERE ro.order_count > 5;
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error**: `connect ECONNREFUSED 127.0.0.1:5432`
+
+**Solutions**:
+1. Verify PostgreSQL is running: `pg_isready`
+2. Check `postgresql.conf` for `listen_addresses`
+3. Verify `pg_hba.conf` allows your connection method
+4. Check firewall rules
+
+### Authentication Failed
+
+**Error**: `password authentication failed for user "username"`
+
+**Solutions**:
+1. Verify username and password
+2. Check `pg_hba.conf` authentication method (md5, scram-sha-256)
+3. Try connecting with `psql` to verify credentials
+
+### SSL Required
+
+**Error**: `no pg_hba.conf entry for host, SSL off`
+
+**Solution**: Add `?sslmode=require` to your DSN:
+```bash
+postgres://user:pass@host:5432/db?sslmode=require
+```
+
+### Timeout Issues
+
+**Error**: `Connection timeout` or `Query timeout`
+
+**Solutions**:
+1. Increase timeouts in TOML configuration
+2. Check network connectivity
+3. Optimize slow queries
+4. Consider using connection pooling
+
+### Schema Not Found
+
+**Error**: `schema "myschema" does not exist`
+
+**Solutions**:
+1. Verify schema exists: `SELECT schema_name FROM information_schema.schemata;`
+2. Check search_path configuration
+3. Use fully qualified table names: `schema.table`
+
+## Performance Tips
+
+1. **Use read replicas** for analytics queries to reduce load on primary
+2. **Enable connection pooling** (enabled by default in connector)
+3. **Set appropriate timeouts** to prevent long-running queries from blocking
+4. **Use EXPLAIN ANALYZE** to optimize slow queries
+5. **Leverage row count estimation** for large tables instead of COUNT(*)
+6. **Configure search_path** to avoid schema qualification in queries
+
+## Next Steps
+
+- [Configure multi-database connections](/config/toml)
+- [Set up SSH tunneling](/connectors/ssh-tunnels)
+- [Explore other connectors](/connectors/overview)

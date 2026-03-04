@@ -1,0 +1,142 @@
+---
+title: Introduction
+description: A zero-dependency, token-efficient MCP server for PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite
+---
+
+## What is DBHub?
+
+DBHub is a lightweight Model Context Protocol (MCP) server that bridges AI assistants with your databases. It implements the MCP specification to provide a standardized interface for database operations, enabling AI agents like Claude Desktop, Claude Code, Cursor, and VS Code to interact with your databases intelligently.
+
+<Info>
+DBHub is brought to you by [Bytebase](https://www.bytebase.com/), the open-source database DevSecOps platform.
+</Info>
+
+## Understanding MCP servers
+
+The Model Context Protocol (MCP) is a standardized interface that allows AI assistants to interact with external data sources and tools. DBHub implements this protocol as an MCP server, acting as a gateway between:
+
+- **MCP Clients**: AI assistants (Claude Desktop, Claude Code, Cursor, VS Code, Copilot CLI)
+- **Databases**: Your PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite databases
+
+```
++------------------+    +--------------+    +------------------+
+|                  |    |              |    |                  |
+|  Claude Desktop  +--->+              +--->+    PostgreSQL    |
+|                  |    |              |    |                  |
+|  Claude Code     +--->+              +--->+    SQL Server    |
+|                  |    |              |    |                  |
+|  Cursor          +--->+    DBHub     +--->+    SQLite        |
+|                  |    |              |    |                  |
+|  VS Code         +--->+              +--->+    MySQL         |
+|                  |    |              |    |                  |
+|  Copilot CLI     +--->+              +--->+    MariaDB       |
+|                  |    |              |    |                  |
++------------------+    +--------------+    +------------------+
+    MCP Clients           MCP Server             Databases
+```
+
+## Supported databases
+
+DBHub supports five major database systems through a unified interface:
+
+<CardGroup cols={2}>
+  <Card title="PostgreSQL" icon="database">
+    Full support for schemas, procedures, functions, and advanced features
+  </Card>
+  <Card title="MySQL" icon="database">
+    Complete MySQL compatibility with all standard operations
+  </Card>
+  <Card title="MariaDB" icon="database">
+    Native MariaDB connector with full feature support
+  </Card>
+  <Card title="SQL Server" icon="database">
+    Microsoft SQL Server support including named instances and NTLM authentication
+  </Card>
+  <Card title="SQLite" icon="database">
+    File-based and in-memory SQLite databases
+  </Card>
+</CardGroup>
+
+## Key features
+
+<AccordionGroup>
+  <Accordion title="Zero dependencies">
+    DBHub is designed to work out of the box with no additional dependencies. Simply install via npm or run with Docker, and you're ready to connect to your databases.
+  </Accordion>
+
+  <Accordion title="Token efficient">
+    DBHub implements only two core MCP tools (`execute_sql` and `search_objects`) to maximize your AI assistant's context window. The `search_objects` tool uses progressive disclosure, allowing you to start with minimal token usage (just object names) and request more details only when needed.
+  </Accordion>
+
+  <Accordion title="Multi-database support">
+    Connect to multiple databases simultaneously using TOML configuration. Perfect for managing production, staging, and development databases from a single DBHub instance.
+  </Accordion>
+
+  <Accordion title="SSH tunnels">
+    Securely connect to remote databases through SSH bastion hosts with support for:
+    - Password and key-based authentication
+    - Multi-hop tunneling via ProxyJump
+    - Automatic SSH config file parsing
+    - Keepalive for stable long-running connections
+  </Accordion>
+
+  <Accordion title="Built-in workbench">
+    DBHub includes a web-based interface for testing queries, running custom tools, and viewing request traces without requiring an MCP client.
+  </Accordion>
+
+  <Accordion title="Guardrails and safety">
+    Built-in safety controls include:
+    - Read-only mode to prevent accidental modifications
+    - Row limiting to prevent overwhelming responses
+    - Query timeouts to prevent runaway operations
+    - Per-tool configuration for granular control
+  </Accordion>
+</AccordionGroup>
+
+## MCP tools
+
+DBHub exposes three types of MCP tools:
+
+### Built-in tools
+
+<CardGroup cols={2}>
+  <Card title="execute_sql" icon="play" href="/tools/execute-sql">
+    Execute SQL queries with transaction support and safety controls. Supports multiple statements separated by semicolons.
+  </Card>
+  <Card title="search_objects" icon="magnifying-glass" href="/tools/search-objects">
+    Search and explore database schemas, tables, columns, indexes, and procedures with progressive disclosure.
+  </Card>
+</CardGroup>
+
+### Custom tools
+
+Define reusable, parameterized SQL operations in your `dbhub.toml` configuration file. Perfect for common queries that you want to expose as dedicated tools. [Learn more about custom tools](/tools/custom-tools).
+
+## How it works
+
+1. **Configure**: Set up DBHub with your database connection details via command-line arguments, environment variables, or TOML configuration
+2. **Connect**: DBHub establishes a connection to your database(s) and registers MCP tools
+3. **Discover**: Your AI assistant discovers available tools through the MCP protocol
+4. **Execute**: The assistant can execute SQL queries, explore schemas, and invoke custom tools
+5. **Respond**: DBHub formats results and returns them to the assistant
+
+<Tip>
+DBHub supports both **stdio** transport (for desktop MCP clients) and **HTTP** transport (for network-based clients and the built-in workbench).
+</Tip>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Install DBHub using Docker, npm, or build from source
+  </Card>
+  <Card title="Quick start" icon="rocket" href="/quickstart">
+    Get started in minutes with Docker or demo mode
+  </Card>
+  <Card title="Configuration" icon="gear" href="/config/toml">
+    Learn about multi-database setup and advanced configuration
+  </Card>
+  <Card title="Workbench" icon="browser" href="/workbench/overview">
+    Explore the built-in web interface
+  </Card>
+</CardGroup>

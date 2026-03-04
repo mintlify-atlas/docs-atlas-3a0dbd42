@@ -1,0 +1,478 @@
+---
+title: 'Custom Tools'
+description: 'Define reusable SQL operations as MCP tools'
+icon: 'wrench'
+---
+
+Custom tools allow you to define reusable, parameterized SQL operations in your `dbhub.toml` configuration. They appear as first-class MCP tools alongside `execute_sql` and `search_objects`, making common queries easily accessible to AI agents.
+
+## Why Use Custom Tools?
+
+Custom tools provide several benefits:
+
+- **Reusability** - Define once, use everywhere
+- **Abstraction** - Hide complex SQL behind simple tool names
+- **Parameterization** - Safe, type-checked parameter substitution
+- **Discoverability** - Tools appear in MCP client tool lists with descriptions
+- **Team standardization** - Share common queries across team members
+- **Business logic encapsulation** - Encode domain knowledge in tool definitions
+
+## Configuration Syntax
+
+Custom tools are defined in the `[[tools]]` section of `dbhub.toml`:
+
+```toml
+[[tools]]
+name = "tool_name"              # Unique identifier (appears in MCP client)
+description = "What it does"   # Shown to AI agents for tool selection
+source = "database_id"          # Which database to query
+statement = "SQL query"         # SQL with parameter placeholders
+readonly = true                 # Optional: restrict to read-only
+max_rows = 1000                 # Optional: limit result set size
+
+# Parameters (optional)
+[[tools.parameters]]
+name = "param_name"
+type = "string"                 # string | integer | float | boolean | array
+description = "What it's for"
+required = true                 # true | false
+default = "value"               # Optional default value
+allowed_values = ["a", "b"]    # Optional enum constraint
+```
+
+## Parameter Types
+
+Custom tools support the following parameter types:
+
+<ParamField path="string" type="type">
+  Text values. Use for names, IDs, search terms, etc.
+  
+  ```toml
+  [[tools.parameters]]
+  name = "email"
+  type = "string"
+  description = "User email address"
+  ```
+</ParamField>
+
+<ParamField path="integer" type="type">
+  Whole numbers. Use for IDs, counts, limits, etc.
+  
+  ```toml
+  [[tools.parameters]]
+  name = "user_id"
+  type = "integer"
+  description = "User ID"
+  ```
+</ParamField>
+
+<ParamField path="float" type="type">
+  Decimal numbers. Use for prices, percentages, etc.
+  
+  ```toml
+  [[tools.parameters]]
+  name = "price"
+  type = "float"
+  description = "Product price"
+  ```
+</ParamField>
+
+<ParamField path="boolean" type="type">
+  True/false values. Use for flags, toggles, etc.
+  
+  ```toml
+  [[tools.parameters]]
+  name = "active"
+  type = "boolean"
+  description = "Filter for active users only"
+  ```
+</ParamField>
+
+<ParamField path="array" type="type">
+  Lists of values. Use for bulk operations.
+  
+  ```toml
+  [[tools.parameters]]
+  name = "user_ids"
+  type = "array"
+  description = "List of user IDs to process"
+  ```
+</ParamField>
+
+## Parameter Placeholders
+
+SQL parameter placeholders vary by database type:
+
+- **PostgreSQL:** `$1`, `$2`, `$3`, etc.
+- **MySQL/MariaDB:** `?`, `?`, `?`, etc. (positional)
+- **SQL Server:** `@p1`, `@p2`, `@p3`, etc.
+- **SQLite:** `?`, `?`, `?`, etc. (positional)
+
+Parameters are substituted in the order they appear in the `[[tools.parameters]]` array.
+
+## Examples
+
+### Simple Query (No Parameters)
+
+List all current department managers:
+
+```toml
+[[tools]]
+name = "current_managers"
+description = "List all current department managers"
+source = "local_pg"
+readonly = true
+max_rows = 100
+statement = """
+  SELECT e.emp_no, e.first_name, e.last_name, d.dept_name, dm.from_date
+  FROM dept_manager dm
+  JOIN employee e ON dm.emp_no = e.emp_no
+  JOIN department d ON dm.dept_no = d.dept_no
+  WHERE dm.to_date = '9999-01-01'
+  ORDER BY d.dept_name
+"""
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "current_managers"
+}
+```
+
+### Query with Required Parameter
+
+Get user details by email:
+
+```toml
+[[tools]]
+name = "get_user_by_email"
+description = "Look up a user by their email address"
+source = "local_pg"
+readonly = true
+statement = "SELECT id, name, email, created_at FROM users WHERE email = $1"
+
+[[tools.parameters]]
+name = "email"
+type = "string"
+description = "User's email address"
+required = true
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "get_user_by_email",
+  "arguments": {
+    "email": "alice@example.com"
+  }
+}
+```
+
+### Query with Required + Optional Parameters
+
+Search employees by salary range:
+
+```toml
+[[tools]]
+name = "salary_search"
+description = "Find employees earning at least min_salary, optionally capped by max_salary"
+source = "local_pg"
+readonly = true
+max_rows = 1000
+statement = """
+  SELECT e.emp_no, e.first_name, e.last_name, s.amount as salary
+  FROM employee e
+  JOIN salary s ON e.emp_no = s.emp_no
+  WHERE s.amount >= $1
+    AND ($2::int IS NULL OR s.amount <= $2)
+  ORDER BY s.amount DESC
+  LIMIT 100
+"""
+
+[[tools.parameters]]
+name = "min_salary"
+type = "integer"
+description = "Minimum salary (required)"
+required = true
+
+[[tools.parameters]]
+name = "max_salary"
+type = "integer"
+description = "Maximum salary (optional, defaults to no limit)"
+required = false
+```
+
+**Usage in MCP client:**
+```json
+// With both parameters
+{
+  "tool": "salary_search",
+  "arguments": {
+    "min_salary": 50000,
+    "max_salary": 100000
+  }
+}
+
+// With only required parameter
+{
+  "tool": "salary_search",
+  "arguments": {
+    "min_salary": 50000
+  }
+}
+```
+
+### Query with Enum Parameter
+
+Filter products by category:
+
+```toml
+[[tools]]
+name = "products_by_category"
+description = "List products in a specific category"
+source = "local_pg"
+readonly = true
+max_rows = 500
+statement = "SELECT id, name, price, stock FROM products WHERE category = $1 ORDER BY name"
+
+[[tools.parameters]]
+name = "category"
+type = "string"
+description = "Product category"
+required = true
+allowed_values = ["electronics", "clothing", "books", "home", "toys"]
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "products_by_category",
+  "arguments": {
+    "category": "electronics"
+  }
+}
+```
+
+### Write Operation (DELETE)
+
+Delete employee salary records:
+
+```toml
+[[tools]]
+name = "delete_employee_salaries"
+description = "Delete all salary records for a specific employee"
+source = "local_pg"
+readonly = false  # Explicitly allow DELETE operations
+statement = "DELETE FROM salary WHERE emp_no = $1"
+
+[[tools.parameters]]
+name = "emp_no"
+type = "integer"
+description = "Employee number"
+required = true
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "delete_employee_salaries",
+  "arguments": {
+    "emp_no": 10001
+  }
+}
+```
+
+### Write Operation (UPDATE)
+
+Update employee department:
+
+```toml
+[[tools]]
+name = "update_employee_department"
+description = "Update an employee's department assignment"
+source = "local_pg"
+readonly = false  # Explicitly allow UPDATE operations
+statement = "UPDATE dept_emp SET dept_no = $2 WHERE emp_no = $1"
+
+[[tools.parameters]]
+name = "emp_no"
+type = "integer"
+description = "Employee number"
+required = true
+
+[[tools.parameters]]
+name = "dept_no"
+type = "string"
+description = "New department number (e.g., d001, d002)"
+required = true
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "update_employee_department",
+  "arguments": {
+    "emp_no": 10001,
+    "dept_no": "d005"
+  }
+}
+```
+
+### Complex Aggregation Report
+
+Generate monthly sales report:
+
+```toml
+[[tools]]
+name = "monthly_sales_report"
+description = "Generate sales report for a specific month and year"
+source = "local_pg"
+readonly = true
+max_rows = 1000
+statement = """
+  SELECT 
+    DATE_TRUNC('day', order_date) as date,
+    COUNT(*) as order_count,
+    SUM(total_amount) as revenue,
+    AVG(total_amount) as avg_order_value
+  FROM orders
+  WHERE EXTRACT(YEAR FROM order_date) = $1
+    AND EXTRACT(MONTH FROM order_date) = $2
+  GROUP BY DATE_TRUNC('day', order_date)
+  ORDER BY date
+"""
+
+[[tools.parameters]]
+name = "year"
+type = "integer"
+description = "Year (e.g., 2024)"
+required = true
+
+[[tools.parameters]]
+name = "month"
+type = "integer"
+description = "Month (1-12)"
+required = true
+```
+
+**Usage in MCP client:**
+```json
+{
+  "tool": "monthly_sales_report",
+  "arguments": {
+    "year": 2024,
+    "month": 3
+  }
+}
+```
+
+## Response Format
+
+Custom tools return the same format as `execute_sql`:
+
+```json
+{
+  "rows": [
+    { "column1": "value1", "column2": "value2" }
+  ],
+  "count": 1,
+  "source_id": "database_id"
+}
+```
+
+## Error Handling
+
+### Parameter Validation Errors
+
+Occurs when required parameters are missing or have invalid types:
+
+```json
+{
+  "error": "Parameter validation failed: email: Required; user_id: Expected number, received string",
+  "code": "EXECUTION_ERROR"
+}
+```
+
+### Readonly Violations
+
+Occurs when attempting write operations with `readonly = true`:
+
+```json
+{
+  "error": "Read-only mode is enabled for tool 'get_users'. Only SELECT operations are allowed.",
+  "code": "READONLY_VIOLATION"
+}
+```
+
+### SQL Execution Errors
+
+Occurs when the database returns an error:
+
+```json
+{
+  "error": "syntax error at or near 'FORM'\n\nSQL: SELECT * FORM users WHERE id = $1\nParameters: [123]",
+  "code": "EXECUTION_ERROR"
+}
+```
+
+## Configuration Validation
+
+DBHub validates your custom tool configuration on startup:
+
+- **Unique names** - Tool names must be unique per source
+- **Valid sources** - Referenced sources must exist
+- **Required fields** - Custom tools must have `name`, `description`, `source`, and `statement`
+- **Parameter types** - Parameter types must be valid (string/integer/float/boolean/array)
+- **No builtin conflicts** - Custom tools cannot use reserved names (`execute_sql`, `search_objects`)
+
+## Implementation Details
+
+- **Handler creation:** `src/tools/custom-tool-handler.ts`
+- **Schema building:** `buildZodSchemaFromParameters()` converts TOML config to Zod schemas
+- **Parameter mapping:** `src/utils/parameter-mapper.ts` maps named arguments to positional parameters
+- **Config loading:** `src/config/toml-loader.ts` validates and loads tool definitions
+- **Tool registration:** Tools are registered alongside builtin tools during server startup
+
+## Best Practices
+
+1. **Use descriptive names** - Tool names should clearly indicate what they do
+2. **Write clear descriptions** - AI agents use descriptions to select appropriate tools
+3. **Set readonly = true** - For queries to prevent accidental data modification
+4. **Limit result sets** - Use `max_rows` to prevent overwhelming responses
+5. **Document parameters** - Clear descriptions help AI agents provide correct values
+6. **Use enum constraints** - `allowed_values` prevents invalid parameter values
+7. **Handle nulls explicitly** - For optional parameters, use `IS NULL` checks in SQL
+8. **Test in development** - Verify tool behavior before deploying to production
+9. **Version your config** - Keep `dbhub.toml` in version control
+10. **Share across teams** - Custom tools become team knowledge assets
+
+## Common Use Cases
+
+### Business Intelligence
+
+- Monthly/quarterly reports
+- Sales analytics
+- User engagement metrics
+- Performance dashboards
+
+### Data Management
+
+- Bulk updates
+- Data cleanup operations
+- Audit trail queries
+- Archive old records
+
+### Application Operations
+
+- User lookup by various fields
+- Feature flag queries
+- Configuration retrieval
+- Health check queries
+
+### Development Workflows
+
+- Test data generation
+- Schema verification
+- Data migration validation
+- Integration test helpers

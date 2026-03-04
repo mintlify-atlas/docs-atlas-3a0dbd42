@@ -1,0 +1,516 @@
+---
+title: MySQL Connector
+description: Connect DBHub to MySQL databases with support for IAM authentication and multi-statement queries
+---
+
+The MySQL connector provides comprehensive support for MySQL databases, including native multi-statement execution, IAM authentication for AWS RDS, and full schema introspection.
+
+## DSN Format
+
+MySQL connection strings use the `mysql://` protocol:
+
+```
+mysql://[username[:password]@]host[:port]/database[?options]
+```
+
+### Basic Examples
+
+```bash
+# Standard connection
+mysql://root:password@localhost:3306/mydb
+
+# With SSL enabled
+mysql://user:pass@db.example.com:3306/production?sslmode=require
+
+# Custom port
+mysql://user:pass@localhost:3307/mydb
+```
+
+## Connection Options
+
+### SSL/TLS Modes
+
+MySQL supports SSL configuration via the `sslmode` query parameter:
+
+```bash
+# No SSL (development only)
+mysql://user:pass@localhost:3306/db?sslmode=disable
+
+# SSL without certificate verification (recommended for most use cases)
+mysql://user:pass@host:3306/db?sslmode=require
+
+# SSL with certificate verification
+mysql://user:pass@host:3306/db
+```
+
+**Implementation**: See src/connectors/mysql/index.ts:56-64
+
+### Timeouts
+
+Configure connection and query timeouts via TOML:
+
+```toml
+[[sources]]
+id = "mysql_db"
+dsn = "mysql://user:pass@host:3306/db"
+connection_timeout = 30  # Seconds to establish connection
+query_timeout = 60       # Seconds for query execution
+```
+
+The MySQL connector converts these to milliseconds for the `mysql2` library (src/connectors/mysql/index.ts:69-72, 136-138).
+
+### AWS RDS IAM Authentication
+
+The connector automatically detects AWS IAM authentication tokens and configures the cleartext plugin:
+
+```bash
+# IAM token contains "X-Amz-Credential" - detected automatically
+mysql://dbuser:TOKEN_CONTAINING_X-Amz-Credential@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production
+```
+
+**Implementation**: src/connectors/mysql/index.ts:75-87
+
+When an IAM token is detected:
+1. Enables `mysql_clear_password` authentication plugin
+2. Automatically enables SSL (required for IAM authentication)
+3. Sets `rejectUnauthorized: false` for RDS certificates
+
+## Supported Features
+
+### Schemas (Databases)
+
+In MySQL, "schema" and "database" are synonymous. List all databases:
+
+```sql
+SELECT SCHEMA_NAME 
+FROM INFORMATION_SCHEMA.SCHEMATA
+ORDER BY SCHEMA_NAME;
+```
+
+**Implementation**: src/connectors/mysql/index.ts:155-173
+
+### Tables and Views
+
+Get tables in a database:
+
+```typescript
+// Current database (from connection)
+await connector.getTables();
+
+// Specific database
+await connector.getTables('mydatabase');
+```
+
+**Implementation**: src/connectors/mysql/index.ts:175-204
+
+If no schema is provided, uses `DATABASE()` function to get the current active database.
+
+### Table Schema with Comments
+
+MySQL supports column comments:
+
+```sql
+CREATE TABLE users (
+  email VARCHAR(255) NOT NULL COMMENT 'User email address'
+);
+```
+
+The connector retrieves these comments (src/connectors/mysql/index.ts:312-351):
+
+```typescript
+const schema = await connector.getTableSchema('users');
+// Returns: [
+//   {
+//     column_name: 'email',
+//     data_type: 'varchar',
+//     is_nullable: 'NO',
+//     column_default: null,
+//     description: 'User email address'
+//   }
+// ]
+```
+
+### Indexes
+
+MySQL indexes include:
+- Primary keys (`is_primary: true`, index name is `PRIMARY`)
+- Unique indexes (`is_unique: true`)
+- Multi-column indexes
+- Full-text indexes
+- Spatial indexes
+
+**Implementation**: src/connectors/mysql/index.ts:235-310
+
+```typescript
+const indexes = await connector.getTableIndexes('users');
+// Returns: [
+//   {
+//     index_name: 'PRIMARY',
+//     column_names: ['id'],
+//     is_unique: true,
+//     is_primary: true
+//   },
+//   {
+//     index_name: 'idx_email',
+//     column_names: ['email'],
+//     is_unique: true,
+//     is_primary: false
+//   }
+// ]
+```
+
+### Stored Procedures and Functions
+
+MySQL supports both stored procedures and functions:
+
+```typescript
+// Get all routines
+await connector.getStoredProcedures('mydatabase');
+
+// Only functions
+await connector.getStoredProcedures('mydatabase', 'function');
+
+// Only procedures
+await connector.getStoredProcedures('mydatabase', 'procedure');
+```
+
+**Implementation**: src/connectors/mysql/index.ts:381-418
+
+Get procedure details including definition:
+
+```typescript
+const proc = await connector.getStoredProcedureDetail('my_procedure', 'mydatabase');
+// Returns: {
+//   procedure_name: 'my_procedure',
+//   procedure_type: 'procedure',
+//   language: 'sql',
+//   parameter_list: 'user_id IN int',
+//   definition: 'CREATE PROCEDURE...'
+// }
+```
+
+**Implementation**: src/connectors/mysql/index.ts:420-541
+
+The connector attempts multiple methods to retrieve procedure definitions:
+1. `SHOW CREATE PROCEDURE` / `SHOW CREATE FUNCTION`
+2. `INFORMATION_SCHEMA.ROUTINES.ROUTINE_DEFINITION`
+3. `INFORMATION_SCHEMA.ROUTINES.ROUTINE_BODY`
+
+### Table Comments
+
+Retrieve table-level comments:
+
+```sql
+CREATE TABLE users (
+  id INT PRIMARY KEY
+) COMMENT='Application user accounts';
+```
+
+```typescript
+const comment = await connector.getTableComment('users');
+// Returns: 'Application user accounts'
+```
+
+**Implementation**: src/connectors/mysql/index.ts:353-379
+
+## Query Execution
+
+### Parameterized Queries
+
+MySQL uses `?` placeholders for parameters:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM users WHERE email = ? AND active = ?",
+  { maxRows: 100 },
+  ['user@example.com', true]
+);
+```
+
+**Implementation**: src/connectors/mysql/index.ts:576-587
+
+### Multi-Statement Support
+
+MySQL has native multi-statement support enabled by default:
+
+```typescript
+await connector.executeSQL(`
+  UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+  UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+  SELECT * FROM accounts WHERE id IN (1, 2);
+`, { maxRows: undefined });
+```
+
+**Implementation**: src/connectors/mysql/index.ts:51 (multipleStatements: true)
+
+Results from all statements are collected and returned:
+- SELECT results are aggregated into `rows`
+- INSERT/UPDATE/DELETE counts are summed in `rowCount`
+
+**Result parsing**: src/connectors/mysql/index.ts:595-597
+
+### Session Consistency
+
+The connector uses dedicated connections from the pool for session consistency:
+
+```typescript
+// Each executeSQL gets a dedicated connection
+// This ensures LAST_INSERT_ID() and session variables work correctly
+await connector.executeSQL(
+  "INSERT INTO users (name) VALUES ('Alice'); SELECT LAST_INSERT_ID();",
+  {}
+);
+```
+
+**Implementation**: src/connectors/mysql/index.ts:556 (getConnection)
+
+### Row Limiting
+
+Applies database-native LIMIT clause for efficiency:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+// Executes: SELECT * FROM large_table LIMIT 100
+```
+
+**Implementation**: src/connectors/mysql/index.ts:560-572
+
+## Common Scenarios
+
+### Connect to Local MySQL
+
+```bash
+# Environment variable
+export DSN="mysql://root:password@localhost:3306/mydb"
+
+# Or in TOML
+[[sources]]
+id = "local"
+dsn = "mysql://root:password@localhost:3306/mydb"
+```
+
+### Connect to AWS RDS MySQL
+
+**Option 1: Standard Authentication**
+
+```toml
+[[sources]]
+id = "rds_mysql"
+dsn = "mysql://admin:password@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production?sslmode=require"
+connection_timeout = 30
+```
+
+**Option 2: IAM Authentication**
+
+```bash
+# Generate IAM token (expires in 15 minutes)
+TOKEN=$(aws rds generate-db-auth-token \
+  --hostname mydb.abc123.us-east-1.rds.amazonaws.com \
+  --port 3306 \
+  --username dbuser \
+  --region us-east-1)
+
+# Use token in DSN
+export DSN="mysql://dbuser:$TOKEN@mydb.abc123.us-east-1.rds.amazonaws.com:3306/production"
+```
+
+The connector automatically detects IAM tokens and configures authentication.
+
+### Connect Through SSH Tunnel
+
+```toml
+[[sources]]
+id = "remote_mysql"
+dsn = "mysql://dbuser:dbpass@internal-db:3306/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+```
+
+See [SSH Tunnels](/connectors/ssh-tunnels) for details.
+
+### Work with Multiple Databases
+
+```toml
+[[sources]]
+id = "db1"
+dsn = "mysql://user:pass@localhost:3306/database1"
+
+[[sources]]
+id = "db2"
+dsn = "mysql://user:pass@localhost:3306/database2"
+```
+
+Use `source_id` parameter in MCP tools:
+
+```typescript
+// Query db1
+await execute_sql("SELECT * FROM users", { source_id: "db1" });
+
+// Query db2
+await execute_sql("SELECT * FROM orders", { source_id: "db2" });
+```
+
+### Cross-Database Queries
+
+MySQL supports cross-database queries in a single connection:
+
+```sql
+-- Query tables from different databases
+SELECT 
+  u.name,
+  COUNT(o.id) as order_count
+FROM database1.users u
+LEFT JOIN database2.orders o ON u.id = o.user_id
+GROUP BY u.id;
+```
+
+## MySQL-Specific SQL Examples
+
+### JSON Queries
+
+```sql
+-- Query JSON columns (MySQL 5.7+)
+SELECT 
+  JSON_EXTRACT(data, '$.name') as name,
+  JSON_EXTRACT(data, '$.tags') as tags
+FROM events
+WHERE JSON_EXTRACT(data, '$.type') = 'purchase';
+
+-- MySQL 8.0+ shorthand
+SELECT 
+  data->>'$.name' as name,
+  data->'$.tags' as tags
+FROM events
+WHERE data->>'$.type' = 'purchase';
+```
+
+### Window Functions (MySQL 8.0+)
+
+```sql
+SELECT 
+  date,
+  amount,
+  SUM(amount) OVER (ORDER BY date) as running_total,
+  ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY date DESC) as recency_rank
+FROM transactions;
+```
+
+### CTEs (MySQL 8.0+)
+
+```sql
+WITH recent_orders AS (
+  SELECT customer_id, COUNT(*) as order_count
+  FROM orders
+  WHERE created_at > DATE_SUB(NOW(), INTERVAL 30 DAY)
+  GROUP BY customer_id
+)
+SELECT c.name, ro.order_count
+FROM customers c
+JOIN recent_orders ro ON c.id = ro.customer_id
+WHERE ro.order_count > 5;
+```
+
+### Full-Text Search
+
+```sql
+-- Create full-text index
+ALTER TABLE articles ADD FULLTEXT(title, content);
+
+-- Search with MATCH...AGAINST
+SELECT title, MATCH(title, content) AGAINST('mysql database') as relevance
+FROM articles
+WHERE MATCH(title, content) AGAINST('mysql database')
+ORDER BY relevance DESC;
+```
+
+## Troubleshooting
+
+### Connection Refused
+
+**Error**: `connect ECONNREFUSED 127.0.0.1:3306`
+
+**Solutions**:
+1. Verify MySQL is running: `systemctl status mysql`
+2. Check bind-address in `/etc/mysql/mysql.conf.d/mysqld.cnf`
+3. Verify firewall rules: `sudo ufw status`
+4. Test with mysql client: `mysql -h localhost -u user -p`
+
+### Authentication Failed
+
+**Error**: `Access denied for user 'username'@'host'`
+
+**Solutions**:
+1. Verify username and password
+2. Check user privileges:
+   ```sql
+   SELECT user, host FROM mysql.user WHERE user = 'username';
+   SHOW GRANTS FOR 'username'@'host';
+   ```
+3. Grant access if needed:
+   ```sql
+   GRANT ALL PRIVILEGES ON database.* TO 'username'@'%' IDENTIFIED BY 'password';
+   FLUSH PRIVILEGES;
+   ```
+
+### SSL Connection Required
+
+**Error**: `Connections using insecure transport are prohibited`
+
+**Solution**: Add `?sslmode=require` to your DSN:
+```bash
+mysql://user:pass@host:3306/db?sslmode=require
+```
+
+### Public Key Retrieval
+
+**Error**: `Client does not support authentication protocol requested by server`
+
+**Solutions**:
+1. Use mysql_native_password plugin:
+   ```sql
+   ALTER USER 'username'@'%' IDENTIFIED WITH mysql_native_password BY 'password';
+   ```
+2. Or enable SSL with `sslmode=require`
+
+### IAM Authentication Not Working
+
+**Error**: `Access denied` with IAM token
+
+**Solutions**:
+1. Verify IAM token is valid (expires in 15 minutes)
+2. Check database user is configured for IAM:
+   ```sql
+   CREATE USER 'dbuser' IDENTIFIED WITH AWSAuthenticationPlugin AS 'RDS';
+   GRANT ALL PRIVILEGES ON database.* TO 'dbuser'@'%';
+   ```
+3. Verify IAM policy allows `rds-db:connect`
+4. Ensure SSL is enabled (automatic with IAM tokens)
+
+### Database Not Selected
+
+**Error**: `No database selected`
+
+**Solutions**:
+1. Specify database in DSN: `mysql://user:pass@host:3306/mydb`
+2. Or use fully qualified table names: `database.table`
+
+## Performance Tips
+
+1. **Use connection pooling** (enabled by default in connector)
+2. **Enable query cache** for read-heavy workloads (MySQL 5.7 and earlier)
+3. **Use EXPLAIN** to analyze query performance
+4. **Create appropriate indexes** for frequently queried columns
+5. **Use prepared statements** via parameterized queries to avoid SQL injection
+6. **Optimize joins** by ensuring join columns are indexed
+7. **Use LIMIT** for large result sets to reduce memory usage
+
+## Next Steps
+
+- [Configure multi-database connections](/config/toml)
+- [Set up SSH tunneling](/connectors/ssh-tunnels)
+- [Compare with MariaDB connector](/connectors/mariadb)
+- [Explore other connectors](/connectors/overview)

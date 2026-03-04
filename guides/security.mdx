@@ -1,0 +1,616 @@
+---
+title: Security
+description: Security features and best practices for protecting your database connections
+---
+
+## Read-Only Mode Enforcement
+
+### SQL Keyword Filtering
+
+DBHub enforces read-only restrictions at the SQL parsing level using keyword validation.
+
+From `src/utils/allowed-keywords.ts:9-15`, allowed operations by database type:
+
+```typescript
+const allowedKeywords = {
+  postgres: ["select", "with", "explain", "analyze", "show"],
+  mysql: ["select", "with", "explain", "analyze", "show", "describe", "desc"],
+  mariadb: ["select", "with", "explain", "analyze", "show", "describe", "desc"],
+  sqlite: ["select", "with", "explain", "analyze", "pragma"],
+  sqlserver: ["select", "with", "explain", "showplan"]
+}
+```
+
+### How Read-Only Validation Works
+
+From `src/utils/allowed-keywords.ts:24-40`:
+
+1. **Strip comments and strings** - Prevents `SELECT '-- DROP TABLE'` attacks
+2. **Extract first keyword** - Analyzes the actual SQL operation
+3. **Compare against whitelist** - Only allowed keywords pass validation
+
+```typescript
+// ✅ Allowed in readonly mode
+SELECT * FROM users;
+WITH active_users AS (SELECT * FROM users WHERE active = true) SELECT * FROM active_users;
+EXPLAIN SELECT * FROM orders;
+
+// ❌ Blocked in readonly mode
+DELETE FROM users WHERE id = 1;
+UPDATE users SET email = 'new@example.com';
+DROP TABLE users;
+INSERT INTO users (email) VALUES ('user@example.com');
+```
+
+### Multi-Statement Protection
+
+From `src/tools/execute-sql.ts:25-28`, all statements in a multi-statement query must be read-only:
+
+```typescript
+// ❌ Blocked: Contains non-SELECT statement
+SELECT * FROM users; DELETE FROM logs;
+
+// ✅ Allowed: All statements are read-only
+SELECT COUNT(*) FROM users; SELECT MAX(created_at) FROM orders;
+```
+
+### Configuring Read-Only Mode
+
+**Per-tool configuration** (recommended):
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://readonly:***@prod.example.com:5432/app"
+
+[[tools]]
+name = "execute_sql"
+source = "prod_db"
+readonly = true  # Per-tool enforcement
+```
+
+**Per-source with multiple tools**:
+
+```toml
+[[sources]]
+id = "analytics"
+dsn = "postgres://analyst:***@analytics.example.com:5432/warehouse"
+
+# All custom tools for this source can be read-only
+[[tools]]
+name = "daily_revenue"
+source = "analytics"
+readonly = true
+statement = "SELECT date, SUM(amount) FROM sales GROUP BY date ORDER BY date DESC LIMIT 30"
+
+[[tools]]
+name = "top_products"
+source = "analytics"
+readonly = true
+statement = "SELECT product_id, COUNT(*) as sales FROM orders GROUP BY product_id ORDER BY sales DESC LIMIT 10"
+```
+
+## DSN Obfuscation
+
+### Password Redaction in Logs
+
+From `src/utils/dsn-obfuscate.ts:91-141`, passwords are automatically redacted:
+
+```typescript
+// Original DSN
+const dsn = "postgres://user:MyP@ssw0rd!@localhost:5432/app"
+
+// Logged as
+// postgres://user:********@localhost:5432/app
+```
+
+**Obfuscation rules**:
+- Passwords replaced with asterisks (8 characters max)
+- Usernames preserved for debugging
+- Host, port, database preserved
+- Query parameters preserved (for `sslmode`, etc.)
+
+### SSH Configuration Obfuscation
+
+From `src/utils/dsn-obfuscate.ts:148-168`, SSH credentials are also redacted:
+
+```typescript
+// Original SSH config
+{
+  host: "bastion.example.com",
+  username: "deploy",
+  password: "secretpass",
+  passphrase: "keypass"
+}
+
+// Logged as
+{
+  host: "bastion.example.com",
+  username: "deploy",
+  password: "********",
+  passphrase: "********"
+}
+```
+
+**Private key paths are NOT redacted** - Only the passphrase is hidden.
+
+## Query Guardrails
+
+### Row Limiting
+
+From `src/types/config.ts:76`, configure `max_rows` per tool:
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "prod_db"
+max_rows = 1000  # Hard limit on returned rows
+```
+
+**How limits are enforced** (from `src/utils/sql-row-limiter.ts:126-144`):
+
+```sql
+-- Original query
+SELECT * FROM large_table
+
+-- With max_rows = 100 (PostgreSQL/MySQL/MariaDB/SQLite)
+SELECT * FROM large_table LIMIT 100
+
+-- With max_rows = 100 (SQL Server)
+SELECT TOP 100 * FROM large_table
+```
+
+**Smart limiting**:
+- Existing `LIMIT` uses minimum of configured and specified
+- Parameterized `LIMIT` ($1, ?, @p1) triggers subquery wrapping
+- Only applies to `SELECT` queries
+
+### Query Timeouts
+
+From `src/types/config.ts:51`, set timeouts per source:
+
+```toml
+[[sources]]
+id = "analytics_warehouse"
+dsn = "postgres://analyst:***@warehouse.example.com:5432/analytics"
+query_timeout = 60  # Seconds (PostgreSQL, MySQL, MariaDB, SQL Server)
+```
+
+**Supported databases**:
+- PostgreSQL: Uses `query_timeout` in pool config (`src/connectors/postgres/index.ts:76-79`)
+- MySQL/MariaDB: Client-side timeout
+- SQL Server: Query-level timeout
+- SQLite: Not supported at protocol level
+
+**Prevents**:
+- Runaway queries consuming database resources
+- Long-running operations blocking other users
+- Accidental full table scans on large datasets
+
+### Connection Timeouts
+
+From `src/types/config.ts:50`:
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:***@remote.example.com:5432/app"
+connection_timeout = 30  # Seconds to establish initial connection
+```
+
+**Prevents**:
+- Hanging on unreachable databases
+- Indefinite blocking during startup
+- Resource exhaustion from stuck connections
+
+## SSH Tunnel Security
+
+### Key-Based Authentication
+
+**Recommended approach**:
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://app:***@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"  # Ed25519 preferred over RSA
+```
+
+**Key type recommendations**:
+1. **Ed25519** - Modern, secure, fast (preferred)
+2. **RSA 4096** - Widely compatible
+3. **ECDSA** - Good balance of security and performance
+4. Avoid: RSA 2048 or DSA keys
+
+### Password vs Key-Based Auth
+
+From `src/utils/ssh-tunnel.ts:50-53`:
+
+```typescript
+// ❌ Weak: Password-based
+ssh_password = "mypassword"
+
+// ✅ Strong: Key-based with passphrase
+ssh_key = "~/.ssh/id_ed25519"
+ssh_passphrase = "strong_key_passphrase"
+
+// ⚠️ Acceptable for non-production: Key without passphrase
+ssh_key = "~/.ssh/id_ed25519"
+```
+
+### Passphrase-Protected Keys
+
+**Best practice for production**:
+
+```bash
+# Generate Ed25519 key with passphrase
+ssh-keygen -t ed25519 -C "dbhub-production" -f ~/.ssh/dbhub_prod
+# Enter strong passphrase when prompted
+```
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://app:***@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/dbhub_prod"
+ssh_passphrase = "${SSH_KEY_PASSPHRASE}"  # From environment variable
+```
+
+### SSH Keepalive for Long Connections
+
+From `src/types/config.ts:20-23`, prevent idle disconnections:
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:***@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+ssh_keepalive_interval = 60   # Send keepalive every 60 seconds
+ssh_keepalive_count_max = 3    # Disconnect after 3 missed responses
+```
+
+**Implementation** (from `src/utils/ssh-tunnel.ts:174-185`):
+- Converts interval from seconds to milliseconds
+- Validates interval is non-negative
+- Default: Keepalive disabled (`interval = 0`)
+
+### ProxyJump Security
+
+From `src/types/config.ts:16-19`, multi-hop SSH:
+
+```toml
+ssh_host = "internal-db-server.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+ssh_proxy_jump = "bastion.company.com,jump2.internal:2222"
+```
+
+**Security considerations**:
+- Each hop must trust the SSH key
+- Connections established sequentially (bastion → jump2 → target)
+- Same credentials used for all hops (from `src/utils/ssh-tunnel.ts:70-138`)
+- Each jump host can see traffic to next hop
+
+## SSL/TLS Encryption
+
+### SSL Mode Configuration
+
+From CLAUDE.md:150, supported SSL modes:
+
+```toml
+# No encryption (local development only)
+[[sources]]
+id = "local_dev"
+dsn = "postgres://user:pass@localhost:5432/app?sslmode=disable"
+
+# SSL without certificate verification (staging)
+[[sources]]
+id = "staging"
+dsn = "postgres://user:pass@staging.example.com:5432/app?sslmode=require"
+
+# SSL with certificate verification (production - default)
+[[sources]]
+id = "prod"
+dsn = "postgres://user:pass@prod.example.com:5432/app"  # SSL enabled by default
+```
+
+**Individual parameter format**:
+
+```toml
+[[sources]]
+id = "prod_db"
+type = "postgres"
+host = "prod.example.com"
+port = 5432
+database = "app"
+user = "app_user"
+password = "secure_password"
+sslmode = "require"  # "disable" or "require"
+```
+
+### SSL for Network Databases
+
+**Applies to**: PostgreSQL, MySQL, MariaDB, SQL Server
+**Not applicable**: SQLite (local file-based)
+
+**Recommendations by environment**:
+- **Production**: Always use SSL (`sslmode=require` or stricter)
+- **Staging**: Use SSL (`sslmode=require`)
+- **Local development**: SSL optional (`sslmode=disable` for simplicity)
+- **SSH tunnels**: SSL optional (tunnel already encrypted)
+
+## Credential Management
+
+### Never Commit Secrets
+
+**Update .gitignore**:
+
+```bash
+# .gitignore
+.env
+.env.local
+.env.*.local
+dbhub.toml  # If containing actual credentials
+*.pem
+*.key
+```
+
+**Use example files**:
+
+```bash
+# Committed to version control
+dbhub.toml.example
+.env.example
+
+# Local only (not committed)
+dbhub.toml  # Copy from .example and add real credentials
+.env
+```
+
+### Environment Variables for Secrets
+
+**TOML with environment variable references** (manual substitution):
+
+```toml
+[[sources]]
+id = "prod_db"
+type = "postgres"
+host = "prod.example.com"
+port = 5432
+database = "app"
+user = "app_user"
+password = "${DATABASE_PASSWORD}"  # Manually replace before use
+```
+
+**Or use .env for single database**:
+
+```bash
+# .env (never committed)
+DSN=postgres://app_user:${DATABASE_PASSWORD}@prod.example.com:5432/app
+```
+
+### Cloud Secret Managers
+
+For production deployments:
+
+1. **AWS Secrets Manager**
+   ```bash
+   export DSN=$(aws secretsmanager get-secret-value --secret-id prod/dbhub/dsn --query SecretString --output text)
+   npx @bytebase/dbhub --transport http
+   ```
+
+2. **HashiCorp Vault**
+   ```bash
+   export DSN=$(vault kv get -field=dsn secret/dbhub/prod)
+   npx @bytebase/dbhub --transport http
+   ```
+
+3. **Google Secret Manager**
+   ```bash
+   export DSN=$(gcloud secrets versions access latest --secret="dbhub-prod-dsn")
+   npx @bytebase/dbhub --transport http
+   ```
+
+## Network Security
+
+### SSH Tunnels for Firewall Traversal
+
+From `src/utils/ssh-tunnel.ts:1-348`, secure access to private databases:
+
+```toml
+[[sources]]
+id = "private_db"
+dsn = "postgres://app:***@10.0.1.100:5432/app"  # Private IP
+ssh_host = "bastion.company.com"  # Public IP with SSH access
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+```
+
+**Tunnel flow**:
+1. DBHub connects to bastion via SSH
+2. SSH tunnel forwards local port to database server
+3. Database connection goes through encrypted tunnel
+4. Database sees connection from bastion (trusted IP)
+
+### Bastion Host Architecture
+
+```
+┌──────────┐    SSH Tunnel    ┌─────────────┐    Private Net    ┌──────────────┐
+│  DBHub   │ ←──────────────→ │   Bastion   │ ←───────────────→ │   Database   │
+│ (Public) │   Port 22 (SSH)  │  (Public)   │   Port 5432 (PG)  │  (Private)   │
+└──────────┘                   └─────────────┘                   └──────────────┘
+   Client                       Jump Host                         Target
+```
+
+**Security benefits**:
+- Database not exposed to internet
+- Single point of SSH access control
+- Audit trail of all connections
+- Network segmentation enforced
+
+## Per-Tool Read-Only Configuration
+
+### Granular Access Control
+
+From `src/types/config.ts:71-98`, configure readonly per tool:
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://admin:***@prod.example.com:5432/app"
+
+# Read-only for exploration
+[[tools]]
+name = "execute_sql"
+source = "prod_db"
+readonly = true
+max_rows = 100
+
+# Custom tool with write access (specific operation)
+[[tools]]
+name = "create_user"
+source = "prod_db"
+readonly = false  # Explicit write permission
+description = "Create a new user account"
+statement = "INSERT INTO users (email, name) VALUES ($1, $2) RETURNING id"
+
+[[tools.parameters]]
+name = "email"
+type = "string"
+required = true
+
+[[tools.parameters]]
+name = "name"
+type = "string"
+required = true
+```
+
+**Benefits**:
+- Default read-only for general queries
+- Explicit write permission for specific operations
+- Prevents accidental data modifications
+- Audit trail of write-capable tools
+
+## SQL Injection Prevention
+
+### Parameterized Queries in Custom Tools
+
+**Use parameter placeholders**, not string concatenation:
+
+```toml
+# ✅ Safe: Parameterized query
+[[tools]]
+name = "find_user"
+source = "prod_db"
+statement = "SELECT * FROM users WHERE email = $1"  # PostgreSQL
+# statement = "SELECT * FROM users WHERE email = ?"   # MySQL/SQLite
+# statement = "SELECT * FROM users WHERE email = @p1" # SQL Server
+
+[[tools.parameters]]
+name = "email"
+type = "string"
+required = true
+```
+
+```toml
+# ❌ Unsafe: Would require string concatenation (not supported)
+# Never attempt to build SQL with string interpolation
+```
+
+**DBHub automatically handles**:
+- Parameter binding to prevent injection
+- Type validation for parameters
+- Proper escaping based on database type
+
+### Parameter Types and Validation
+
+From `src/types/config.ts:60-67`:
+
+```toml
+[[tools.parameters]]
+name = "user_id"
+type = "integer"  # Validated as integer
+required = true
+
+[[tools.parameters]]
+name = "email"
+type = "string"  # Validated as string
+required = true
+
+[[tools.parameters]]
+name = "is_active"
+type = "boolean"  # Validated as boolean
+default = true
+
+[[tools.parameters]]
+name = "tags"
+type = "array"  # Validated as array
+required = false
+```
+
+**Supported types**: `string`, `integer`, `float`, `boolean`, `array`
+
+## Security Checklist
+
+### Database Connection
+
+- [ ] Use `readonly = true` for production databases
+- [ ] Enable SSL/TLS (`sslmode=require`) for network databases
+- [ ] Set `connection_timeout` for remote databases
+- [ ] Set `query_timeout` to prevent runaway queries
+- [ ] Configure `max_rows` limits per tool
+
+### SSH Tunnels
+
+- [ ] Prefer key-based authentication over passwords
+- [ ] Use passphrase-protected SSH keys for production
+- [ ] Use Ed25519 keys (or RSA 4096) for new deployments
+- [ ] Configure SSH keepalive for long-running connections
+- [ ] Set appropriate file permissions on SSH keys (`chmod 600`)
+
+### Credential Management
+
+- [ ] Never commit `.env` or TOML files with credentials
+- [ ] Use `.gitignore` to exclude secret files
+- [ ] Keep example files (`.env.example`, `dbhub.toml.example`) in version control
+- [ ] Use environment variables or secret managers for production
+- [ ] Rotate database credentials regularly
+- [ ] Use separate credentials per environment (dev/staging/prod)
+
+### Access Control
+
+- [ ] Configure `readonly = true` as default
+- [ ] Explicitly mark write-capable tools with `readonly = false`
+- [ ] Use database-level users with minimal permissions
+- [ ] Grant only necessary privileges (SELECT vs. ALL)
+- [ ] Use separate database users per application/environment
+
+### Custom Tools
+
+- [ ] Always use parameterized queries (never string concatenation)
+- [ ] Validate parameter types in tool configuration
+- [ ] Mark read-only tools with `readonly = true`
+- [ ] Document tool purpose and parameters clearly
+- [ ] Review custom tools for security before deployment
+
+### Network Security
+
+- [ ] Use SSH tunnels for databases behind firewalls
+- [ ] Implement bastion host architecture for production
+- [ ] Restrict database network access to known IPs
+- [ ] Enable database audit logging
+- [ ] Monitor unusual query patterns
+
+### Monitoring and Auditing
+
+- [ ] Review request traces in workbench for suspicious activity
+- [ ] Enable database query logging
+- [ ] Monitor connection attempts and failures
+- [ ] Set up alerts for failed authentication attempts
+- [ ] Regularly review granted database permissions

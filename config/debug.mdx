@@ -1,0 +1,579 @@
+---
+title: Debugging & Troubleshooting
+description: Debug DBHub configuration, connections, and tool execution
+---
+
+This guide covers debugging techniques for diagnosing and resolving issues with DBHub configuration, database connections, and tool execution.
+
+## Startup Diagnostics
+
+When DBHub starts, it outputs detailed diagnostic information to help identify configuration issues:
+
+```bash
+pnpm run dev
+```
+
+### Understanding Startup Output
+
+DBHub displays:
+
+1. **Configuration source** - Where settings were loaded from
+2. **ASCII banner** - Shows version and active modes (DEMO, etc.)
+3. **Sources table** - Lists all configured databases with connection details
+4. **Available tools** - Shows which tools are enabled for each source
+5. **Server status** - MCP endpoint or stdio transport confirmation
+
+**Example startup output:**
+
+```
+Configuration source: dbhub.toml
+
+ _____  ____  _   _       _     
+|  __ \|  _ \| | | |     | |    
+| |  | | |_) | |_| |_   _| |__  
+| |  | |  _ <|  _  | | | | '_ \ 
+| |__| | |_) | | | | |_| | |_) |
+|_____/|____/|_| |_|\__,_|_.__/ 
+
+v1.0.0 - Minimal Database MCP Server
+
+┌─────────────┬──────────┬───────────┬──────────┬──────────┬─────────────────────────────────────────┐
+│ Source      │ Type     │ Host      │ Database │ Default  │ Tools                                   │
+├─────────────┼──────────┼───────────┼──────────┼──────────┼─────────────────────────────────────────┤
+│ local_pg    │ postgres │ localhost │ myapp    │ Yes      │ execute_sql_local_pg,                   │
+│             │          │           │          │          │ search_objects_local_pg                 │
+├─────────────┼──────────┼───────────┼──────────┼──────────┼─────────────────────────────────────────┤
+│ prod_pg     │ postgres │ 10.0.1.50 │ prod     │ No       │ 🔒 execute_sql_prod_pg,                │
+│             │          │           │          │          │ search_objects_prod_pg                  │
+└─────────────┴──────────┴───────────┴──────────┴──────────┴─────────────────────────────────────────┘
+
+MCP server running on stdio
+```
+
+<Info>
+  The 🔒 icon indicates a tool configured with `readonly = true`.
+</Info>
+
+## Configuration Validation
+
+### Check Configuration Loading
+
+DBHub displays the configuration source on startup:
+
+```
+Configuration source: dbhub.toml
+```
+
+Possible sources (in priority order):
+- `demo mode` - Using `--demo` flag
+- `command line argument` - Using `--dsn` flag
+- `dbhub.toml` - TOML config file in current directory
+- `custom-config.toml` - TOML file from `--config` flag
+- `environment variable` - Using `DSN` environment variable
+- `.env file` - Loaded from `.env` or `.env.local`
+
+<Tip>
+  If configuration isn't loading from the expected source, check the priority order. Command-line arguments override all other sources.
+</Tip>
+
+### TOML Validation Errors
+
+DBHub validates TOML configuration on startup and exits with detailed errors:
+
+**Common validation errors:**
+
+<AccordionGroup>
+
+<Accordion title="Missing required fields">
+
+```
+ERROR: Configuration file dbhub.toml: source 'prod_pg' must have either:
+  - 'dsn' field (e.g., dsn = "postgres://user:pass@host:5432/dbname")
+  - OR connection parameters (type, host, database, user, password)
+```
+
+**Solution:** Add either a `dsn` or individual connection parameters:
+
+```toml
+[[sources]]
+id = "prod_pg"
+dsn = "postgres://user:pass@localhost:5432/prod"
+```
+
+</Accordion>
+
+<Accordion title="Duplicate source IDs">
+
+```
+ERROR: Configuration file dbhub.toml: duplicate source IDs found: local_pg. 
+Each source must have a unique 'id' field.
+```
+
+**Solution:** Ensure each `[[sources]]` entry has a unique `id`:
+
+```toml
+[[sources]]
+id = "local_pg"
+dsn = "..."
+
+[[sources]]
+id = "prod_pg"  # Different from local_pg
+dsn = "..."
+```
+
+</Accordion>
+
+<Accordion title="Tool references unknown source">
+
+```
+ERROR: Configuration file dbhub.toml: tool 'execute_sql' references unknown source 'prod_pg'
+```
+
+**Solution:** Ensure the `source` field in `[[tools]]` matches a defined source `id`:
+
+```toml
+[[sources]]
+id = "prod_pg"  # Must match
+dsn = "..."
+
+[[tools]]
+name = "execute_sql"
+source = "prod_pg"  # Must match source id above
+```
+
+</Accordion>
+
+<Accordion title="Invalid database type">
+
+```
+ERROR: Configuration file dbhub.toml: source 'my_db' has invalid type 'mssql'. 
+Valid types: postgres, mysql, mariadb, sqlserver, sqlite
+```
+
+**Solution:** Use correct database type identifier:
+
+```toml
+[[sources]]
+id = "my_db"
+type = "sqlserver"  # Not "mssql"
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Connection Issues
+
+### Database Connection Failures
+
+If DBHub cannot connect to a database, you'll see an error on startup:
+
+```
+Fatal error: Failed to connect to database: Connection refused
+```
+
+**Troubleshooting steps:**
+
+1. **Verify database is running**
+   ```bash
+   # PostgreSQL
+   pg_isready -h localhost -p 5432
+   
+   # MySQL/MariaDB
+   mysqladmin ping -h localhost -P 3306
+   ```
+
+2. **Check connection parameters**
+   - Hostname/IP is correct
+   - Port number matches database server
+   - Database name exists
+   - Credentials are valid
+
+3. **Test connection manually**
+   ```bash
+   # PostgreSQL
+   psql "postgres://user:pass@localhost:5432/dbname"
+   
+   # MySQL
+   mysql -h localhost -P 3306 -u user -p dbname
+   ```
+
+4. **Check firewall rules**
+   - Ensure database port is accessible
+   - For remote databases, verify network connectivity
+
+5. **Review SSL requirements**
+   ```toml
+   # Try disabling SSL for local testing
+   [[sources]]
+   id = "test"
+   dsn = "postgres://user:pass@localhost:5432/db?sslmode=disable"
+   ```
+
+### SSH Tunnel Issues
+
+When using SSH tunnels, check these common issues:
+
+<AccordionGroup>
+
+<Accordion title="SSH authentication failed">
+
+```
+Error: SSH tunnel configuration requires either --ssh-password or --ssh-key for authentication
+```
+
+**Solution:** Provide authentication credentials:
+
+```toml
+[[sources]]
+id = "prod_pg"
+dsn = "..."
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"  # Add authentication
+```
+
+</Accordion>
+
+<Accordion title="SSH host unreachable">
+
+```
+Error: SSH connection failed: connect ETIMEDOUT
+```
+
+**Troubleshooting:**
+1. Verify SSH host is accessible:
+   ```bash
+   ssh deploy@bastion.company.com
+   ```
+
+2. Check SSH port:
+   ```bash
+   nc -zv bastion.company.com 22
+   ```
+
+3. Test with verbose SSH:
+   ```bash
+   ssh -v deploy@bastion.company.com
+   ```
+
+</Accordion>
+
+<Accordion title="SSH key permission errors">
+
+```
+Error: SSH private key permissions are too open
+```
+
+**Solution:** Fix SSH key permissions:
+
+```bash
+chmod 600 ~/.ssh/id_ed25519
+chmod 644 ~/.ssh/id_ed25519.pub
+```
+
+</Accordion>
+
+<Accordion title="SSH tunnel keeps disconnecting">
+
+**Solution:** Enable SSH keepalive:
+
+```toml
+[[sources]]
+id = "prod_pg"
+dsn = "..."
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+ssh_keepalive_interval = 60  # Send keepalive every 60s
+ssh_keepalive_count_max = 3  # Disconnect after 3 missed responses
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Request Tracking
+
+DBHub tracks all tool executions when running in HTTP mode:
+
+### Viewing Request History
+
+Access the request tracking API:
+
+```bash
+# Start in HTTP mode
+pnpm run dev -- --transport=http
+
+# View all requests
+curl http://localhost:8080/api/requests
+
+# Filter by source
+curl http://localhost:8080/api/requests?source_id=prod_pg
+```
+
+**Response format:**
+
+```json
+{
+  "requests": [
+    {
+      "id": "req_abc123",
+      "timestamp": "2026-03-04T10:30:15.123Z",
+      "sourceId": "prod_pg",
+      "toolName": "execute_sql",
+      "sql": "SELECT * FROM users LIMIT 10",
+      "durationMs": 45,
+      "client": "Claude Desktop",
+      "success": true
+    },
+    {
+      "id": "req_def456",
+      "timestamp": "2026-03-04T10:28:30.456Z",
+      "sourceId": "prod_pg",
+      "toolName": "search_objects",
+      "sql": "SELECT table_name FROM information_schema.tables",
+      "durationMs": 120,
+      "client": "Claude Desktop",
+      "success": false,
+      "error": "permission denied for schema public"
+    }
+  ],
+  "total": 2
+}
+```
+
+<Info>
+  Request history is stored in-memory and limited to the last 100 requests per source. History is lost when DBHub restarts.
+</Info>
+
+### Workbench for Testing
+
+The workbench UI provides visual debugging when running in HTTP mode:
+
+```bash
+pnpm run dev -- --transport=http
+```
+
+Open http://localhost:8080 in your browser:
+
+- **Connection Details** - View database type, host, port, credentials
+- **Available Tools** - Test tools with parameters
+- **Request History** - See recent executions with timing
+
+![Workbench UI](/images/workbench/workbench.webp)
+
+<Tip>
+  The workbench is perfect for testing TOML configuration changes and custom tools before using them in Claude Desktop.
+</Tip>
+
+## MCP Client Logs
+
+When using DBHub with Claude Desktop or other MCP clients, check the client's logs:
+
+### Claude Desktop Logs
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    # View live logs
+    tail -f ~/Library/Logs/Claude/mcp*.log
+    
+    # Search for errors
+    grep -i error ~/Library/Logs/Claude/mcp*.log
+    ```
+  </Tab>
+  <Tab title="Windows">
+    ```powershell
+    # Logs location
+    %APPDATA%\Claude\logs\mcp*.log
+    ```
+  </Tab>
+  <Tab title="Linux">
+    ```bash
+    # View live logs
+    tail -f ~/.config/Claude/logs/mcp*.log
+    ```
+  </Tab>
+</Tabs>
+
+### Common MCP Errors
+
+<AccordionGroup>
+
+<Accordion title="Tool execution timeout">
+
+```
+Error: Tool execution timed out after 30000ms
+```
+
+**Solution:** Increase query timeout in TOML:
+
+```toml
+[[sources]]
+id = "analytics"
+dsn = "..."
+query_timeout = 300  # 5 minutes for long-running queries
+```
+
+</Accordion>
+
+<Accordion title="Server not responding">
+
+```
+Error: MCP server process exited unexpectedly
+```
+
+**Troubleshooting:**
+1. Check DBHub can start manually:
+   ```bash
+   pnpm run dev
+   ```
+
+2. Verify MCP configuration in Claude Desktop:
+   ```json
+   {
+     "mcpServers": {
+       "dbhub": {
+         "command": "node",
+         "args": ["/path/to/dbhub/dist/index.js"]
+       }
+     }
+   }
+   ```
+
+3. Check Node.js version:
+   ```bash
+   node --version  # Should be >= 18
+   ```
+
+</Accordion>
+
+</AccordionGroup>
+
+## SQL Execution Errors
+
+### Read-Only Mode Violations
+
+If a tool is configured with `readonly = true`, write operations are blocked:
+
+```
+Error: Query rejected by read-only filter: UPDATE users SET status = 'active'
+Query type not allowed in read-only mode: UPDATE
+Allowed keywords: SELECT, SHOW, DESCRIBE, EXPLAIN, WITH
+```
+
+**Solution:** Either:
+1. Remove `readonly = true` from the tool configuration
+2. Use a different source without read-only restrictions
+3. Rewrite query as a read-only operation
+
+### Row Limit Exceeded
+
+When `max_rows` is configured, queries returning more rows are truncated:
+
+```
+Note: Results limited to 1000 rows (query returned more).
+Original query would have returned 15,234 rows.
+```
+
+**Solution:** Increase `max_rows` or add explicit `LIMIT` clause:
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "prod_pg"
+max_rows = 10000  # Increase limit
+```
+
+### Syntax Errors
+
+DBHub passes SQL directly to the database. Syntax errors come from the database:
+
+```
+Error: syntax error at or near "SELCT"
+```
+
+**Solution:** Fix SQL syntax and try again. Use the workbench to test queries interactively.
+
+## Performance Debugging
+
+### Slow Queries
+
+1. **Check query execution time** in request history
+2. **Use EXPLAIN** to analyze query plan:
+   ```sql
+   EXPLAIN ANALYZE SELECT * FROM large_table WHERE condition = 'value'
+   ```
+
+3. **Add indexes** if needed:
+   ```sql
+   CREATE INDEX idx_condition ON large_table(condition)
+   ```
+
+4. **Set query timeout** to prevent runaway queries:
+   ```toml
+   [[sources]]
+   id = "prod_pg"
+   dsn = "..."
+   query_timeout = 30  # 30 seconds
+   ```
+
+### Slow Startup
+
+If DBHub takes too long to start:
+
+1. **Use lazy connections** for remote databases:
+   ```toml
+   [[sources]]
+   id = "remote_db"
+   dsn = "..."
+   lazy = true  # Defer connection until first query
+   ```
+
+2. **Reduce connection timeout**:
+   ```toml
+   [[sources]]
+   id = "remote_db"
+   dsn = "..."
+   connection_timeout = 10  # Fail fast if unreachable
+   ```
+
+## Logging and Debugging
+
+DBHub outputs diagnostic information to stderr:
+
+- **Configuration loading** - Shows which config sources are checked
+- **Database connections** - Connection attempts and results
+- **SSH tunnels** - Tunnel establishment status
+- **Tool executions** - SQL statements (with passwords redacted)
+- **Errors** - Detailed error messages with context
+
+<Warning>
+  DBHub automatically redacts passwords in DSN strings when logging. However, SQL statements may contain sensitive data - be careful when sharing logs.
+</Warning>
+
+## Getting Help
+
+If you're still experiencing issues:
+
+1. **Check the documentation** - Review configuration guides for your setup
+2. **Test with demo mode** - Verify DBHub works with `--demo` flag
+3. **Simplify configuration** - Start with a minimal config and add complexity
+4. **Check GitHub issues** - Search for similar problems
+5. **Report bugs** - Open an issue at https://github.com/anomalyco/opencode with:
+   - DBHub version (`pnpm run dev` shows version in banner)
+   - Configuration file (with passwords redacted)
+   - Error messages
+   - Steps to reproduce
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Command-Line Config" icon="terminal" href="/config/command-line">
+    Configure via command-line flags
+  </Card>
+  <Card title="TOML Config" icon="file-code" href="/config/toml">
+    Advanced multi-database configuration
+  </Card>
+</CardGroup>

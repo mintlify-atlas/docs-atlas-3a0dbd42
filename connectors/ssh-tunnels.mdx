@@ -1,0 +1,569 @@
+---
+title: SSH Tunnels
+description: Secure database connections through SSH tunnels with support for bastion hosts and ProxyJump
+---
+
+DBHub supports SSH tunneling for secure database connections through bastion hosts or jump servers. This allows you to connect to databases in private networks without exposing them to the internet.
+
+## Overview
+
+SSH tunneling creates an encrypted connection from your local machine to the database server through one or more intermediate SSH servers. DBHub handles the tunnel setup automatically when you configure SSH parameters.
+
+**Implementation**: src/utils/ssh-tunnel.ts
+
+## Configuration Methods
+
+There are three ways to configure SSH tunnels in DBHub:
+
+### 1. TOML Configuration (Recommended)
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://dbuser:dbpass@internal-db-host:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_port = 22  # Optional, defaults to 22
+ssh_user = "admin"
+ssh_password = "sshpass"  # Or use ssh_key
+```
+
+### 2. Environment Variables
+
+```bash
+# Database connection
+export DSN="postgres://dbuser:dbpass@internal-db:5432/mydb"
+
+# SSH tunnel configuration
+export SSH_HOST="bastion.example.com"
+export SSH_PORT="22"
+export SSH_USER="admin"
+export SSH_PASSWORD="sshpass"  # Or SSH_KEY
+```
+
+### 3. Command-Line Arguments
+
+```bash
+dbhub \
+  --dsn "postgres://dbuser:dbpass@internal-db:5432/mydb" \
+  --ssh-host "bastion.example.com" \
+  --ssh-user "admin" \
+  --ssh-password "sshpass"
+```
+
+## Authentication Methods
+
+### Password Authentication
+
+```toml
+[[sources]]
+id = "db"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_password = "mysecurepassword"
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:162
+
+### Private Key Authentication
+
+```toml
+[[sources]]
+id = "db"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"  # Path to private key
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:40-48, 164-169
+
+The connector:
+1. Expands `~/` to home directory
+2. Resolves symlinks (important on Windows)
+3. Reads private key file
+4. Passes key to SSH client
+
+### Passphrase-Protected Keys
+
+```toml
+[[sources]]
+id = "db"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+ssh_passphrase = "keypassphrase"  # Decrypt the private key
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:167-169
+
+### Default SSH Keys
+
+If no `ssh_key` or `ssh_password` is provided, DBHub automatically tries default SSH key locations:
+
+1. `~/.ssh/id_rsa`
+2. `~/.ssh/id_ed25519`
+3. `~/.ssh/id_ecdsa`
+4. `~/.ssh/id_dsa`
+
+**Implementation**: src/utils/ssh-config-parser.ts:10-15, 67-74
+
+## SSH Config File Support
+
+DBHub can read SSH connection parameters from `~/.ssh/config`:
+
+**~/.ssh/config:**
+```
+Host production-db
+  HostName bastion.example.com
+  User admin
+  Port 2222
+  IdentityFile ~/.ssh/production_key
+  ProxyJump jump1.example.com,jump2.example.com
+```
+
+**TOML configuration:**
+```toml
+[[sources]]
+id = "prod"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "production-db"  # Uses alias from SSH config
+```
+
+**Implementation**: src/utils/ssh-config-parser.ts:83-171
+
+When a host looks like an alias (no dots, not an IP), DBHub:
+1. Checks if it looks like an SSH alias (src/utils/ssh-config-parser.ts:177-195)
+2. Reads `~/.ssh/config`
+3. Extracts `HostName`, `User`, `Port`, `IdentityFile`, `ProxyJump`
+4. Merges with explicit TOML configuration
+
+## ProxyJump (Multi-Hop SSH)
+
+For databases behind multiple jump hosts, use ProxyJump:
+
+```toml
+[[sources]]
+id = "nested_db"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "final-bastion.internal"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+ssh_proxy_jump = "jump1.example.com,jump2.example.com"
+```
+
+This creates a connection chain:
+```
+Local → jump1.example.com → jump2.example.com → final-bastion.internal → database
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:37, 66-138
+
+### ProxyJump Format
+
+The `ssh_proxy_jump` parameter supports OpenSSH ProxyJump syntax:
+
+```bash
+# Single jump host
+ssh_proxy_jump = "bastion.example.com"
+
+# Multiple jump hosts (comma-separated)
+ssh_proxy_jump = "jump1.example.com,jump2.example.com"
+
+# With custom ports
+ssh_proxy_jump = "jump1.example.com:2222,jump2.example.com:2223"
+
+# With usernames
+ssh_proxy_jump = "user1@jump1.example.com,user2@jump2.example.com"
+
+# Full format: user@host:port
+ssh_proxy_jump = "admin@jump1.example.com:2222,deploy@jump2.example.com:22"
+```
+
+**Parsing implementation**: src/utils/ssh-config-parser.ts:221-286, 295-305
+
+## Connection Flow
+
+When SSH tunnel is configured:
+
+1. **Parse DSN** to extract target database host and port
+2. **Establish SSH tunnel**:
+   - Connect to first jump host (if ProxyJump configured)
+   - Forward through intermediate jump hosts
+   - Connect to final SSH host
+   - Create local port forward to database
+3. **Modify DSN** to use local tunnel endpoint (localhost:random_port)
+4. **Connect to database** through tunnel
+5. **Clean up** tunnel on disconnect
+
+**Implementation**: src/connectors/manager.ts:142-194
+
+### Port Forwarding Mechanics
+
+DBHub uses dynamic port allocation for the local end of the tunnel:
+
+```typescript
+// Parse database host and port from DSN
+const targetHost = "internal-db-host";
+const targetPort = 5432;
+
+// Establish tunnel (assigns random available local port)
+const tunnelInfo = await tunnel.establish(sshConfig, { targetHost, targetPort });
+// Returns: { localPort: 54321, targetHost: "internal-db-host", targetPort: 5432 }
+
+// Update DSN to use tunnel
+// Original: postgres://user:pass@internal-db-host:5432/db
+// Modified: postgres://user:pass@127.0.0.1:54321/db
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:225-295
+
+## Keepalive Configuration
+
+For long-running connections, configure SSH keepalive to prevent timeout:
+
+```toml
+[[sources]]
+id = "db"
+dsn = "postgres://dbuser:dbpass@internal-db:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+ssh_keepalive_interval = 30  # Send keepalive every 30 seconds
+ssh_keepalive_count_max = 3  # Disconnect after 3 missed keepalives
+```
+
+**Implementation**: src/utils/ssh-tunnel.ts:174-185
+
+This configuration:
+- Sends keepalive packets every 30 seconds
+- Disconnects if 3 consecutive keepalives fail (90 seconds total)
+- Helps detect broken connections
+- Prevents idle timeout on firewalls/NAT devices
+
+## Security Considerations
+
+### Key-Based Authentication (Recommended)
+
+**Best practice**: Use SSH keys instead of passwords:
+
+```bash
+# Generate SSH key pair
+ssh-keygen -t ed25519 -C "dbhub-access"
+
+# Copy public key to bastion host
+ssh-copy-id -i ~/.ssh/id_ed25519.pub admin@bastion.example.com
+
+# Use in DBHub configuration
+[[sources]]
+ssh_key = "~/.ssh/id_ed25519"
+```
+
+### Avoid Storing Passwords in Configuration
+
+**Bad practice**:
+```toml
+ssh_password = "plaintext_password"  # Visible in config file!
+```
+
+**Better approach**: Use environment variables:
+```bash
+export SSH_PASSWORD="password"
+```
+
+**Best approach**: Use SSH keys with ssh-agent:
+```bash
+# Add key to ssh-agent
+ssh-add ~/.ssh/id_ed25519
+
+# DBHub will use agent-forwarded authentication (future feature)
+```
+
+### Restrict SSH User Permissions
+
+On the bastion host, create a limited user for DBHub:
+
+```bash
+# Create user with restricted shell
+sudo useradd -m -s /bin/rbash dbhub-tunnel
+
+# Only allow port forwarding (no shell access)
+# /etc/ssh/sshd_config:
+Match User dbhub-tunnel
+  AllowTcpForwarding yes
+  X11Forwarding no
+  AllowAgentForwarding no
+  PermitTTY no
+  ForceCommand /bin/false
+```
+
+## Common Scenarios
+
+### Connect Through AWS Bastion
+
+```toml
+[[sources]]
+id = "aws_rds"
+dsn = "postgres://dbuser:dbpass@mydb.abc123.us-east-1.rds.amazonaws.com:5432/production"
+ssh_host = "ec2-1-2-3-4.compute-1.amazonaws.com"
+ssh_user = "ec2-user"
+ssh_key = "~/.ssh/aws-key.pem"
+```
+
+### Connect Through Azure Bastion
+
+```toml
+[[sources]]
+id = "azure_db"
+dsn = "postgres://dbuser@myserver:dbpass@myserver.postgres.database.azure.com:5432/mydb"
+ssh_host = "bastion.eastus.cloudapp.azure.com"
+ssh_user = "azureuser"
+ssh_key = "~/.ssh/azure_rsa"
+```
+
+### Connect Through GCP Bastion
+
+```toml
+[[sources]]
+id = "gcp_db"
+dsn = "postgres://dbuser:dbpass@10.0.0.5:5432/mydb"  # Private IP
+ssh_host = "bastion.us-central1-a.c.my-project.internal"
+ssh_user = "user@example.com"
+ssh_key = "~/.ssh/google_compute_engine"
+```
+
+### Multi-Hop Connection (DMZ → Internal Network)
+
+```toml
+[[sources]]
+id = "internal_db"
+dsn = "postgres://dbuser:dbpass@db.internal.corp:5432/mydb"
+ssh_host = "internal-bastion.corp"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+ssh_proxy_jump = "dmz-bastion.corp"  # First hop through DMZ
+```
+
+Connection chain:
+```
+Local → DMZ Bastion → Internal Bastion → Database Server
+```
+
+### SSH Config with ProxyJump
+
+**~/.ssh/config:**
+```
+Host dmz-bastion
+  HostName dmz.example.com
+  User admin
+  IdentityFile ~/.ssh/dmz_key
+
+Host internal-bastion
+  HostName bastion.internal.corp
+  User admin
+  IdentityFile ~/.ssh/internal_key
+  ProxyJump dmz-bastion
+
+Host db-tunnel
+  HostName db.internal.corp
+  User dbadmin
+  IdentityFile ~/.ssh/db_key
+  ProxyJump internal-bastion
+```
+
+**TOML configuration:**
+```toml
+[[sources]]
+id = "db"
+dsn = "postgres://dbuser:dbpass@db.internal.corp:5432/mydb"
+ssh_host = "db-tunnel"  # Uses SSH config with full ProxyJump chain
+```
+
+## Troubleshooting
+
+### Connection Timeout
+
+**Error**: `SSH connection error: connect ETIMEDOUT`
+
+**Solutions**:
+1. Verify bastion host is reachable:
+   ```bash
+   ping bastion.example.com
+   telnet bastion.example.com 22
+   ```
+2. Check firewall rules allow SSH (port 22)
+3. Verify SSH service is running on bastion
+4. Test connection manually:
+   ```bash
+   ssh admin@bastion.example.com
+   ```
+
+### Authentication Failed
+
+**Error**: `SSH connection error: All configured authentication methods failed`
+
+**Solutions**:
+1. Verify SSH credentials:
+   ```bash
+   ssh -i ~/.ssh/id_rsa admin@bastion.example.com
+   ```
+2. Check private key file permissions (should be 600):
+   ```bash
+   chmod 600 ~/.ssh/id_rsa
+   ```
+3. Verify public key is in `~/.ssh/authorized_keys` on bastion
+4. Check SSH user has login permission
+5. If using passphrase, verify `ssh_passphrase` is correct
+
+### Permission Denied (publickey)
+
+**Error**: `SSH connection error: Permission denied (publickey)`
+
+**Solutions**:
+1. Verify public key is installed on bastion:
+   ```bash
+   ssh-copy-id -i ~/.ssh/id_rsa.pub admin@bastion.example.com
+   ```
+2. Check `~/.ssh/authorized_keys` permissions on bastion (should be 600)
+3. Check home directory permissions on bastion (should not be world-writable)
+4. Try with password authentication to diagnose:
+   ```toml
+   ssh_password = "temppass"  # For testing only
+   ```
+
+### Port Forwarding Disabled
+
+**Error**: `SSH forward error: Administratively prohibited`
+
+**Solutions**:
+1. Check SSH server configuration on bastion:
+   ```bash
+   # /etc/ssh/sshd_config should have:
+   AllowTcpForwarding yes
+   ```
+2. Restart SSH service after config change:
+   ```bash
+   sudo systemctl restart sshd
+   ```
+3. Check user-specific restrictions in `Match User` blocks
+
+### Cannot Resolve Database Host
+
+**Error**: `SSH forward error: getaddrinfo ENOTFOUND internal-db-host`
+
+**Solutions**:
+1. Verify database hostname is resolvable from bastion:
+   ```bash
+   ssh admin@bastion.example.com "nslookup internal-db-host"
+   ```
+2. Use IP address instead of hostname in DSN:
+   ```toml
+   dsn = "postgres://user:pass@10.0.0.5:5432/db"
+   ```
+3. Configure DNS on bastion host
+
+### ProxyJump Host Not Found
+
+**Error**: `SSH connection error (jump host 1): ENOTFOUND`
+
+**Solutions**:
+1. Verify ProxyJump syntax:
+   ```toml
+   ssh_proxy_jump = "jump1.example.com,jump2.example.com"
+   ```
+2. Test jump hosts manually:
+   ```bash
+   ssh -J jump1.example.com,jump2.example.com admin@final-host
+   ```
+3. Check each jump host is reachable:
+   ```bash
+   ssh admin@jump1.example.com
+   ssh admin@jump2.example.com
+   ```
+
+### SSH Config Not Found
+
+**Error**: SSH config file warnings or fallback to defaults
+
+**Solutions**:
+1. Verify SSH config file exists:
+   ```bash
+   ls -la ~/.ssh/config
+   ```
+2. Check file permissions (should be 600):
+   ```bash
+   chmod 600 ~/.ssh/config
+   ```
+3. On Windows, verify symlinks are resolved:
+   - `.ssh` directory may be a junction or symlink
+   - DBHub automatically resolves symlinks (src/utils/ssh-config-parser.ts:34-43)
+
+### Tunnel Disconnects After Idle Time
+
+**Error**: Connection drops after period of inactivity
+
+**Solutions**:
+1. Enable SSH keepalive:
+   ```toml
+   ssh_keepalive_interval = 30  # Seconds
+   ssh_keepalive_count_max = 3
+   ```
+2. Configure server-side keepalive in `/etc/ssh/sshd_config`:
+   ```
+   ClientAliveInterval 30
+   ClientAliveCountMax 3
+   ```
+3. Check firewall/NAT timeout settings
+
+### Private Key Passphrase Incorrect
+
+**Error**: `Error: Encrypted private key detected, but no passphrase given`
+
+**Solutions**:
+1. Provide passphrase in configuration:
+   ```toml
+   ssh_passphrase = "your-key-passphrase"
+   ```
+2. Or use environment variable:
+   ```bash
+   export SSH_PASSPHRASE="your-key-passphrase"
+   ```
+3. Or remove passphrase from key (less secure):
+   ```bash
+   ssh-keygen -p -f ~/.ssh/id_rsa
+   ```
+
+## Performance Considerations
+
+### Compression
+
+SSH tunnels add overhead. For large data transfers, consider:
+
+1. Using compression (automatic in SSH)
+2. Limiting result set size with `maxRows`
+3. Using database-native compression (e.g., PostgreSQL's `ssl_compression`)
+
+### Connection Pooling
+
+SSH tunnels are persistent per source. DBHub:
+- Establishes one tunnel per database source
+- Reuses tunnel for all queries to that source
+- Closes tunnel on disconnect
+
+**Implementation**: src/connectors/manager.ts:189, 259-265
+
+### Latency
+
+Each jump host adds latency:
+- Direct: ~10-50ms
+- Through 1 jump: ~50-150ms  
+- Through 2 jumps: ~100-300ms
+
+Minimize jump hosts when possible.
+
+## Next Steps
+
+- [Configure database connections](/config/toml)
+- [Explore connector-specific features](/connectors/overview)
+- [Set up multi-database configurations](/config/toml#multi-source-configuration)

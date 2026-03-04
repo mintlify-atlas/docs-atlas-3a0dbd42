@@ -1,0 +1,289 @@
+---
+title: Connector Overview
+description: Understanding DBHub's database connector architecture and supported databases
+---
+
+DBHub uses a modular connector architecture to support multiple database systems. Each connector implements a standardized interface while providing database-specific optimizations and features.
+
+## Supported Databases
+
+DBHub currently supports the following database systems:
+
+- [PostgreSQL](/connectors/postgresql) - Open-source relational database with advanced features
+- [MySQL](/connectors/mysql) - Popular open-source relational database
+- [MariaDB](/connectors/mariadb) - MySQL-compatible database with enhanced features
+- [SQL Server](/connectors/sqlserver) - Microsoft's enterprise relational database
+- [SQLite](/connectors/sqlite) - Lightweight embedded database
+
+## Connector Architecture
+
+### ConnectorRegistry Pattern
+
+DBHub uses a registry pattern to dynamically register and manage database connectors. Each connector registers itself at module load time:
+
+```typescript
+// From src/connectors/manager.ts
+export class ConnectorRegistry {
+  private static connectors: Map<ConnectorType, Connector> = new Map();
+
+  static register(connector: Connector): void {
+    ConnectorRegistry.connectors.set(connector.id, connector);
+  }
+
+  static getConnectorForDSN(dsn: string): Connector | null {
+    for (const connector of ConnectorRegistry.connectors.values()) {
+      if (connector.dsnParser.isValidDSN(dsn)) {
+        return connector;
+      }
+    }
+    return null;
+  }
+}
+```
+
+When you provide a DSN (Data Source Name), DBHub automatically selects the appropriate connector based on the protocol prefix:
+
+- `postgres://` or `postgresql://` → PostgreSQL connector
+- `mysql://` → MySQL connector
+- `mariadb://` → MariaDB connector
+- `sqlserver://` → SQL Server connector
+- `sqlite://` → SQLite connector
+
+### Connection Management
+
+The `ConnectorManager` class (src/connectors/manager.ts:16) handles database connections and supports:
+
+- **Multi-source connections**: Connect to multiple databases simultaneously with unique IDs
+- **Lazy connection**: Defer connection until first use to improve startup time
+- **SSH tunneling**: Secure connections through bastion hosts
+- **Connection pooling**: Efficient resource usage for network databases
+
+```typescript
+// Example: Multi-source configuration in TOML
+[[sources]]
+id = "prod_pg"
+dsn = "postgres://user:pass@localhost:5432/production"
+
+[[sources]]
+id = "staging_mysql"
+dsn = "mysql://user:pass@localhost:3306/staging"
+```
+
+## Connector Interface
+
+All connectors implement the `Connector` interface (src/connectors/interface.ts:106) which defines:
+
+### Core Methods
+
+- `connect(dsn, initScript?, config?)` - Establish database connection
+- `disconnect()` - Close database connection
+- `clone()` - Create new instance for multi-source support
+
+### Schema Discovery
+
+- `getSchemas()` - List all schemas/databases
+- `getTables(schema?)` - List tables in a schema
+- `getTableSchema(tableName, schema?)` - Get column information
+- `getTableIndexes(tableName, schema?)` - Get index information
+- `getTableComment(tableName, schema?)` - Get table description (optional)
+- `getTableRowCount(tableName, schema?)` - Get estimated row count (optional)
+
+### Stored Procedures
+
+- `getStoredProcedures(schema?, routineType?)` - List procedures/functions
+- `getStoredProcedureDetail(procedureName, schema?)` - Get procedure details
+
+### Query Execution
+
+- `executeSQL(sql, options, parameters?)` - Execute SQL with options and parameters
+
+## Common Connection Options
+
+All connectors support these connection options via `ConnectorConfig` (src/connectors/interface.ts:58):
+
+### Timeouts
+
+```toml
+[[sources]]
+id = "mydb"
+dsn = "postgres://user:pass@host/db"
+connection_timeout = 30  # Seconds to wait for connection
+query_timeout = 60       # Seconds to wait for query results
+```
+
+Supported by: PostgreSQL, MySQL, MariaDB, SQL Server
+
+### SSL/TLS Modes
+
+All network databases support SSL via the `sslmode` query parameter:
+
+- `sslmode=disable` - No SSL connection (default for development)
+- `sslmode=require` - SSL without certificate verification
+- Other values - SSL with certificate verification
+
+```bash
+# Example DSN with SSL
+postgres://user:pass@host:5432/db?sslmode=require
+```
+
+### Read-Only Mode
+
+```toml
+[[sources]]
+id = "readonly_db"
+dsn = "postgres://user:pass@host/db"
+readonly = true  # SDK-level enforcement
+```
+
+Supported by: PostgreSQL (transaction-level), SQLite (database-level)
+
+Note: Application-level readonly validation is available for all databases via tool configuration.
+
+### PostgreSQL-Specific Options
+
+```toml
+[[sources]]
+id = "pg_db"
+dsn = "postgres://user:pass@host/db"
+search_path = "myschema,public"  # Schema search path
+```
+
+The first schema in `search_path` becomes the default for discovery methods.
+
+## DSN Format Overview
+
+Each connector uses a URL-based DSN format:
+
+```
+protocol://[username[:password]@]host[:port]/database[?options]
+```
+
+Examples:
+
+```bash
+# PostgreSQL
+postgres://user:pass@localhost:5432/mydb?sslmode=require
+
+# MySQL
+mysql://root:pass@localhost:3306/mydb?sslmode=disable
+
+# MariaDB
+mariadb://user:pass@localhost:3306/mydb
+
+# SQL Server
+sqlserver://user:pass@localhost:1433/mydb?instanceName=SQLEXPRESS
+
+# SQLite (file-based)
+sqlite:///path/to/database.db
+sqlite:///:memory:  # In-memory database
+```
+
+See individual connector pages for detailed DSN documentation.
+
+## SSH Tunnel Support
+
+All network databases can connect through SSH tunnels for secure access:
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:pass@db-host:5432/mydb"
+ssh_host = "bastion.example.com"
+ssh_user = "admin"
+ssh_key = "~/.ssh/id_rsa"
+ssh_passphrase = "keypass"  # Optional
+```
+
+See [SSH Tunnels](/connectors/ssh-tunnels) for complete documentation.
+
+## Building Custom Connectors
+
+To extend DBHub with a new database connector:
+
+1. Create a new directory: `src/connectors/{database-type}/`
+2. Implement `Connector` and `DSNParser` interfaces from `src/connectors/interface.ts`
+3. Register your connector:
+
+```typescript
+import { ConnectorRegistry } from "../interface.js";
+
+export class MyDatabaseConnector implements Connector {
+  id: ConnectorType = "mydatabase";
+  name = "My Database";
+  dsnParser = new MyDatabaseDSNParser();
+  
+  clone(): Connector {
+    return new MyDatabaseConnector();
+  }
+  
+  // Implement other interface methods...
+}
+
+// Register the connector
+const myConnector = new MyDatabaseConnector();
+ConnectorRegistry.register(myConnector);
+```
+
+4. Add your connector type to the `ConnectorType` union in `src/connectors/interface.ts:4`
+
+For detailed implementation guidance, see the [building-connectors](/building-connectors) guide and review existing connector implementations in `src/connectors/`.
+
+## Multi-Statement Support
+
+Connectors handle multi-statement SQL differently:
+
+- **PostgreSQL**: Uses transactions for consistency (src/connectors/postgres/index.ts:569)
+- **MySQL/MariaDB**: Native multi-statement support enabled by default
+- **SQL Server**: Limited multi-statement support
+- **SQLite**: Executes statements individually, tracks changes
+
+## Error Handling
+
+All connectors follow consistent error handling:
+
+- DSN parsing errors include obfuscated DSN and expected format
+- Connection errors include specific database error messages
+- Query errors log SQL and parameters (when available)
+- All errors preserve stack traces for debugging
+
+## Performance Optimizations
+
+### Connection Pooling
+
+Network databases (PostgreSQL, MySQL, MariaDB, SQL Server) use connection pools:
+
+- PostgreSQL: `pg.Pool`
+- MySQL: `mysql2.createPool()`
+- MariaDB: `mariadb.createPool()`
+- SQL Server: `mssql.ConnectionPool`
+
+### Row Count Estimation
+
+For large tables, connectors provide fast row count estimation using catalog statistics:
+
+- PostgreSQL: `pg_class.reltuples` (src/connectors/postgres/index.ts:337)
+- SQL Server: System catalog statistics
+- MySQL/MariaDB/SQLite: Use `COUNT(*)` as fallback
+
+### Query Result Limiting
+
+The `maxRows` option applies database-native LIMIT clauses to avoid fetching unnecessary data:
+
+```typescript
+// Applied at database level for efficiency
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+```
+
+## Next Steps
+
+- Configure your first connection: [Configuration Guide](/config/toml)
+- Explore connector-specific features:
+  - [PostgreSQL](/connectors/postgresql) - Schemas, full-text search, JSON operations
+  - [MySQL](/connectors/mysql) - IAM authentication, multi-database support
+  - [MariaDB](/connectors/mariadb) - MySQL compatibility with enhancements
+  - [SQL Server](/connectors/sqlserver) - Named instances, Azure AD authentication
+  - [SQLite](/connectors/sqlite) - Embedded databases, in-memory mode
+- Set up secure connections: [SSH Tunnels](/connectors/ssh-tunnels)

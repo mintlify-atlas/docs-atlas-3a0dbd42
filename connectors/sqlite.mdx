@@ -1,0 +1,552 @@
+---
+title: SQLite Connector
+description: Connect DBHub to SQLite databases for embedded and in-memory data storage
+---
+
+The SQLite connector provides support for SQLite databases, including file-based databases and in-memory databases. SQLite is ideal for development, testing, embedded applications, and single-user scenarios.
+
+## DSN Format
+
+SQLite connection strings use the `sqlite://` protocol:
+
+```
+sqlite://[/path/to/database.db | /:memory:]
+```
+
+### Basic Examples
+
+```bash
+# Absolute path (Unix/Linux/macOS)
+sqlite:///home/user/data/mydb.sqlite
+sqlite:///var/lib/myapp/database.db
+
+# Absolute path (Windows)
+sqlite:///C:/Users/User/data/mydb.db
+
+# Relative path
+sqlite://./data/mydb.db
+sqlite://../databases/test.db
+
+# In-memory database (ephemeral)
+sqlite:///:memory:
+```
+
+**Implementation**: See src/connectors/sqlite/index.ts:37-92
+
+## Connection Options
+
+### Read-Only Mode
+
+SQLite supports SDK-level read-only mode at the database level:
+
+```toml
+[[sources]]
+id = "readonly_db"
+dsn = "sqlite:///path/to/database.db"
+readonly = true  # Opens database in readonly mode
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:135-140
+
+Note: In-memory databases (`:memory:`) cannot be opened in readonly mode.
+
+This prevents all write operations:
+- INSERT, UPDATE, DELETE
+- CREATE, ALTER, DROP
+- PRAGMA statements that modify database
+
+### No Timeouts
+
+SQLite is a local file-based database and does not support connection or query timeouts. The `connection_timeout` and `query_timeout` options are accepted for interface compliance but have no effect.
+
+**Implementation**: src/connectors/sqlite/index.ts:127-129
+
+## Supported Features
+
+### Schemas
+
+SQLite does not have schemas like PostgreSQL or MySQL. Each database file is a single namespace. The connector always returns `["main"]` as the schema list.
+
+**Implementation**: src/connectors/sqlite/index.ts:179-189
+
+Note: SQLite supports "attached databases" with `ATTACH DATABASE`, but this is not exposed through the connector interface.
+
+### Tables and Views
+
+Get all tables in the database:
+
+```typescript
+await connector.getTables();
+// Schema parameter is ignored in SQLite
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:191-215
+
+SQLite tables are queried from `sqlite_master` system table:
+
+```sql
+SELECT name FROM sqlite_master 
+WHERE type='table' AND name NOT LIKE 'sqlite_%'
+ORDER BY name;
+```
+
+### Table Schema
+
+Get column information for a table:
+
+```typescript
+const schema = await connector.getTableSchema('users');
+// Returns: [
+//   {
+//     column_name: 'id',
+//     data_type: 'INTEGER',
+//     is_nullable: 'NO',  // Primary key columns are NOT NULL
+//     column_default: null,
+//     description: null  // SQLite does not support column comments
+//   },
+//   {
+//     column_name: 'email',
+//     data_type: 'TEXT',
+//     is_nullable: 'YES',
+//     column_default: null,
+//     description: null
+//   }
+// ]
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:319-347
+
+Uses `PRAGMA table_info(tablename)` to retrieve schema information.
+
+Note: SQLite does not support column comments, so `description` is always `null`.
+
+### Indexes
+
+SQLite indexes include:
+- Primary keys (reported as `PRIMARY` index)
+- Unique indexes
+- Multi-column indexes
+- Partial indexes (filtered)
+- Expression indexes
+
+**Implementation**: src/connectors/sqlite/index.ts:240-317
+
+```typescript
+const indexes = await connector.getTableIndexes('users');
+// Returns: [
+//   {
+//     index_name: 'PRIMARY',
+//     column_names: ['id'],
+//     is_unique: true,
+//     is_primary: true
+//   },
+//   {
+//     index_name: 'idx_users_email',
+//     column_names: ['email'],
+//     is_unique: true,
+//     is_primary: false
+//   }
+// ]
+```
+
+Uses `PRAGMA index_list(tablename)` and `PRAGMA index_info(indexname)` to retrieve index information.
+
+### Stored Procedures and Functions
+
+SQLite does not support stored procedures or user-defined functions in the database. Functions must be registered programmatically via the SQLite C API or language bindings.
+
+```typescript
+// Always returns empty array
+await connector.getStoredProcedures();
+// Returns: []
+
+// Throws error
+await connector.getStoredProcedureDetail('my_function');
+// Error: SQLite does not support stored procedures
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:349-381
+
+### Table Comments
+
+SQLite does not support table-level comments. This method is not implemented.
+
+### Row Count
+
+SQLite does not support fast row count estimation. This method is not implemented, and the search-objects tool falls back to `COUNT(*)`.
+
+## Query Execution
+
+### Parameterized Queries
+
+SQLite uses `?` placeholders for positional parameters:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM users WHERE email = ? AND active = ?",
+  { maxRows: 100 },
+  ['user@example.com', 1]  // SQLite uses 1/0 for boolean
+);
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:416-423, 432-439
+
+Parameters are passed directly to `better-sqlite3`'s prepared statement execution.
+
+### Multi-Statement Support
+
+SQLite supports multi-statement execution:
+
+```typescript
+await connector.executeSQL(`
+  INSERT INTO users (name) VALUES ('Alice');
+  INSERT INTO users (name) VALUES ('Bob');
+  SELECT * FROM users;
+`, { maxRows: undefined });
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:446-492
+
+The connector:
+1. Separates read and write statements
+2. Executes write statements individually, tracking changes
+3. Executes read statements individually, collecting results
+4. Returns aggregated rows and total change count
+
+Note: Parameters are not supported for multi-statement queries.
+
+### Row Limiting
+
+Applies database-native LIMIT clause for efficiency:
+
+```typescript
+await connector.executeSQL(
+  "SELECT * FROM large_table",
+  { maxRows: 100 }
+);
+// Executes: SELECT * FROM large_table LIMIT 100
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:408-410
+
+### Synchronous Execution
+
+SQLite operations in `better-sqlite3` are synchronous, but the connector wraps them in async methods for interface consistency:
+
+```typescript
+// Internally synchronous, but returns Promise for compatibility
+await connector.executeSQL("SELECT * FROM users", {});
+```
+
+## Common Scenarios
+
+### Development Database
+
+```toml
+[[sources]]
+id = "dev"
+dsn = "sqlite:///./dev.db"  # Relative path in project directory
+```
+
+### Testing with In-Memory Database
+
+```toml
+[[sources]]
+id = "test"
+dsn = "sqlite:///:memory:"  # Ephemeral database for tests
+```
+
+In-memory databases:
+- Exist only in RAM
+- Are destroyed when connection is closed
+- Are extremely fast
+- Cannot be opened in readonly mode
+- Are isolated per connection
+
+### Production Embedded Database
+
+```toml
+[[sources]]
+id = "prod"
+dsn = "sqlite:////var/lib/myapp/production.db"  # Absolute path
+readonly = false
+```
+
+### Read-Only Archive Database
+
+```toml
+[[sources]]
+id = "archive"
+dsn = "sqlite:///path/to/archive.db"
+readonly = true  # Prevent accidental modifications
+```
+
+### Multiple SQLite Databases
+
+```toml
+[[sources]]
+id = "users_db"
+dsn = "sqlite:///./data/users.db"
+
+[[sources]]
+id = "products_db"
+dsn = "sqlite:///./data/products.db"
+
+[[sources]]
+id = "orders_db"
+dsn = "sqlite:///./data/orders.db"
+```
+
+Use `source_id` parameter in MCP tools to query different databases.
+
+## SQLite-Specific SQL Examples
+
+### JSON Functions (SQLite 3.38+)
+
+```sql
+-- Query JSON columns
+SELECT 
+  json_extract(data, '$.name') as name,
+  json_extract(data, '$.tags') as tags
+FROM events
+WHERE json_extract(data, '$.type') = 'purchase';
+
+-- SQLite 3.38+ shorthand
+SELECT 
+  data->>'name' as name,
+  data->'tags' as tags
+FROM events
+WHERE data->>'type' = 'purchase';
+```
+
+### Window Functions (SQLite 3.25+)
+
+```sql
+SELECT 
+  date,
+  amount,
+  SUM(amount) OVER (ORDER BY date) as running_total,
+  ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY date DESC) as recency_rank
+FROM transactions;
+```
+
+### CTEs and Recursive Queries
+
+```sql
+WITH RECURSIVE cnt(x) AS (
+  SELECT 1
+  UNION ALL
+  SELECT x+1 FROM cnt WHERE x < 10
+)
+SELECT x FROM cnt;
+
+-- Recursive org chart
+WITH RECURSIVE org_chart(id, name, manager_id, level) AS (
+  SELECT id, name, manager_id, 1
+  FROM employees
+  WHERE manager_id IS NULL
+  
+  UNION ALL
+  
+  SELECT e.id, e.name, e.manager_id, oc.level + 1
+  FROM employees e
+  JOIN org_chart oc ON e.manager_id = oc.id
+)
+SELECT * FROM org_chart ORDER BY level, name;
+```
+
+### Full-Text Search (FTS5)
+
+```sql
+-- Create FTS5 virtual table
+CREATE VIRTUAL TABLE articles_fts USING fts5(title, content);
+
+-- Insert data
+INSERT INTO articles_fts SELECT title, content FROM articles;
+
+-- Search
+SELECT title, rank
+FROM articles_fts
+WHERE articles_fts MATCH 'sqlite database'
+ORDER BY rank;
+```
+
+### PRAGMA Queries
+
+```sql
+-- Database info
+PRAGMA database_list;
+PRAGMA table_info(users);
+PRAGMA index_list(users);
+
+-- Performance tuning
+PRAGMA cache_size = -64000;  -- 64MB cache
+PRAGMA journal_mode = WAL;   -- Write-Ahead Logging
+PRAGMA synchronous = NORMAL; -- Balance safety/performance
+```
+
+## File Path Considerations
+
+### Unix/Linux/macOS
+
+```bash
+# Absolute paths
+sqlite:///home/user/data/db.sqlite
+sqlite:///var/lib/myapp/prod.db
+
+# Relative to current directory
+sqlite://./db.sqlite
+sqlite://../data/db.sqlite
+
+# Home directory expansion (via TOML path expansion)
+dsn = "sqlite://~/data/mydb.db"  # Expands to /home/user/data/mydb.db
+```
+
+### Windows
+
+```bash
+# Absolute paths (note: leading slash is stripped by parser)
+sqlite:///C:/Users/User/data/db.sqlite
+sqlite:///D:/databases/prod.db
+
+# Relative paths
+sqlite://./data/db.sqlite
+sqlite://../databases/db.sqlite
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:54-70
+
+The DSN parser handles:
+- Unix absolute paths: `///path/to/db.sqlite` → `/path/to/db.sqlite`
+- Windows absolute paths: `///C:/path/to/db.sqlite` → `C:/path/to/db.sqlite`
+- Relative paths: `//./path/to/db.sqlite` → `./path/to/db.sqlite`
+
+## Troubleshooting
+
+### File Not Found
+
+**Error**: `SQLITE_CANTOPEN: unable to open database file`
+
+**Solutions**:
+1. Verify the file path exists
+2. Check parent directory permissions
+3. Use absolute paths to avoid ambiguity
+4. Verify path expansion in TOML (use `~/` for home directory)
+
+### Database Locked
+
+**Error**: `SQLITE_BUSY: database is locked`
+
+**Solutions**:
+1. Close other connections to the database
+2. Enable WAL mode for better concurrency:
+   ```sql
+   PRAGMA journal_mode = WAL;
+   ```
+3. Increase busy timeout:
+   ```sql
+   PRAGMA busy_timeout = 5000;  -- 5 seconds
+   ```
+4. Consider using a client-server database for multi-user scenarios
+
+### Readonly Database
+
+**Error**: `SQLITE_READONLY: attempt to write a readonly database`
+
+**Solutions**:
+1. Remove `readonly = true` from TOML configuration
+2. Check file permissions (needs write access)
+3. Verify the database file itself is not readonly
+
+### Disk I/O Error
+
+**Error**: `SQLITE_IOERR: disk I/O error`
+
+**Solutions**:
+1. Check disk space: `df -h`
+2. Verify file system is not corrupted
+3. Check permissions on database file and directory
+4. Run `PRAGMA integrity_check;` to verify database integrity
+
+### Cannot Open :memory: in Readonly Mode
+
+**Error**: Configuration error with readonly :memory: database
+
+**Solution**: Remove `readonly = true` for in-memory databases:
+```toml
+[[sources]]
+id = "test"
+dsn = "sqlite:///:memory:"
+# readonly = true  # Not supported for :memory:
+```
+
+**Implementation**: src/connectors/sqlite/index.ts:137-139
+
+## Performance Tips
+
+1. **Enable WAL mode** for better concurrency:
+   ```sql
+   PRAGMA journal_mode = WAL;
+   ```
+
+2. **Increase cache size** for better performance:
+   ```sql
+   PRAGMA cache_size = -64000;  -- 64MB cache
+   ```
+
+3. **Use transactions** for bulk operations:
+   ```sql
+   BEGIN;
+   INSERT INTO users (name) VALUES ('Alice');
+   INSERT INTO users (name) VALUES ('Bob');
+   -- ... many more inserts
+   COMMIT;
+   ```
+
+4. **Create indexes** for frequently queried columns:
+   ```sql
+   CREATE INDEX idx_users_email ON users(email);
+   ```
+
+5. **Use ANALYZE** to update statistics:
+   ```sql
+   ANALYZE;
+   ```
+
+6. **Avoid SELECT \*** - specify needed columns:
+   ```sql
+   SELECT id, name FROM users;  -- Better than SELECT *
+   ```
+
+7. **Use prepared statements** via parameterized queries to enable query plan caching
+
+8. **Vacuum periodically** to reclaim space:
+   ```sql
+   VACUUM;
+   ```
+
+## When to Use SQLite
+
+**Good use cases:**
+- Development and testing
+- Embedded applications
+- Mobile applications
+- Small to medium single-user applications
+- Configuration storage
+- Local caching
+- Data analysis on local files
+- Prototyping
+
+**Not recommended for:**
+- High-concurrency write scenarios
+- Multi-user web applications
+- Network file systems (NFS, SMB)
+- Very large databases (>100GB)
+- Applications requiring user access control
+- Distributed systems
+
+## Next Steps
+
+- [Configure multi-database connections](/config/toml)
+- [Compare with other connectors](/connectors/overview)
+- [Learn about building custom connectors](/building-connectors)

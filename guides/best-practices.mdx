@@ -1,0 +1,460 @@
+---
+title: Best Practices
+description: Proven strategies for efficient and reliable database operations with DBHub
+---
+
+## Token Efficiency
+
+### Progressive Disclosure with search_objects
+
+The `search_objects` tool offers three detail levels to minimize token usage:
+
+```typescript
+// Start with names only (minimal tokens)
+search_objects({
+  object_type: "table",
+  detail_level: "names"
+})
+
+// Then get summary metadata when needed
+search_objects({
+  object_type: "table",
+  pattern: "user%",
+  detail_level: "summary"  // adds column_count, row_count, comments
+})
+
+// Finally, get full details only for specific objects
+search_objects({
+  object_type: "table",
+  pattern: "users",
+  schema: "public",
+  detail_level: "full"  // includes all columns, indexes, definitions
+})
+```
+
+**Token Savings**: Using `names` instead of `full` can reduce response size by 80-90% for large schemas.
+
+### Limit Result Sets
+
+Always use the `limit` parameter to control result size:
+
+```typescript
+search_objects({
+  object_type: "column",
+  pattern: "%id%",
+  limit: 50  // default: 100, max: 1000
+})
+```
+
+## Multi-Database Organization
+
+### Named Sources in TOML
+
+Organize databases with descriptive IDs and descriptions:
+
+```toml
+[[sources]]
+id = "prod_analytics"
+description = "Production analytics database (read-only)"
+dsn = "postgres://readonly:***@prod.example.com:5432/analytics"
+lazy = true  # Defer connection until first use
+
+[[sources]]
+id = "staging_api"
+description = "Staging API database (full access)"
+dsn = "postgres://api_user:***@staging.example.com:5432/api"
+
+[[sources]]
+id = "local_dev"
+description = "Local development database"
+dsn = "postgres://postgres:postgres@localhost:5432/myapp"
+```
+
+### Consistent source_id Usage
+
+When tools are registered per-source, use the source-specific tool names:
+
+```typescript
+// For source "prod_analytics", the tool is named:
+execute_sql_prod_analytics({ sql: "SELECT * FROM events LIMIT 10" })
+
+// Default source (first in TOML) uses base names:
+execute_sql({ sql: "SELECT version()" })
+```
+
+**Tip**: The first source in your TOML file becomes the default database.
+
+### Lazy Connections for Remote Databases
+
+Use `lazy = true` for databases that aren't always needed:
+
+```toml
+[[sources]]
+id = "prod_reporting"
+dsn = "postgres://user:***@prod-db.company.com:5432/reports"
+lazy = true  # Only connect when first query is executed
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+```
+
+**Benefits**:
+- Faster startup times
+- Reduced connection overhead for rarely-used databases
+- Delayed SSH tunnel establishment until needed
+
+## Read-Only Mode
+
+### When to Enable Read-Only
+
+Configure per-tool readonly mode for:
+
+1. **Production databases** - Prevent accidental modifications
+2. **Shared staging environments** - Protect shared resources
+3. **Analytics/reporting databases** - Enforce query-only access
+4. **Exploratory data analysis** - Safe browsing without risk
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://readonly:***@prod.example.com:5432/app"
+
+[[tools]]
+name = "execute_sql"
+source = "prod_db"
+readonly = true  # Only SELECT, SHOW, DESCRIBE, EXPLAIN allowed
+max_rows = 1000
+```
+
+### Allowed Read-Only Operations
+
+From `src/utils/allowed-keywords.ts:9-15`:
+
+- **PostgreSQL**: `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `SHOW`
+- **MySQL/MariaDB**: `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `SHOW`, `DESCRIBE`, `DESC`
+- **SQLite**: `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `PRAGMA`
+- **SQL Server**: `SELECT`, `WITH`, `EXPLAIN`, `SHOWPLAN`
+
+## Query Limiting
+
+### Setting Appropriate max_rows Values
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "analytics_db"
+max_rows = 1000  # Per-tool row limit
+```
+
+**Recommended Limits**:
+- **Production queries**: 100-1,000 rows (quick results)
+- **Analytics/exploration**: 1,000-10,000 rows (detailed analysis)
+- **Reporting**: 10,000+ rows (full datasets)
+- **Testing**: 10-100 rows (fast iteration)
+
+### How Limits Are Applied
+
+From `src/utils/sql-row-limiter.ts:126-144`:
+
+```sql
+-- Original query
+SELECT * FROM users WHERE active = true
+
+-- With max_rows = 100 (PostgreSQL/MySQL/MariaDB/SQLite)
+SELECT * FROM users WHERE active = true LIMIT 100
+
+-- With max_rows = 100 (SQL Server)
+SELECT TOP 100 * FROM users WHERE active = true
+```
+
+**Smart Limiting**:
+- Existing `LIMIT` clauses are respected (uses minimum of existing and configured)
+- Parameterized `LIMIT` clauses trigger subquery wrapping for safety
+- Only applies to `SELECT` queries
+
+## Custom Tools for Common Queries
+
+### Encapsulating Business Logic
+
+Define reusable tools for frequently-used queries:
+
+```toml
+[[tools]]
+name = "active_users"
+description = "Get all active users with their last login"
+source = "prod_db"
+readonly = true
+max_rows = 500
+statement = """
+  SELECT user_id, email, last_login_at, account_status
+  FROM users
+  WHERE account_status = 'active'
+  ORDER BY last_login_at DESC
+"""
+
+[[tools]]
+name = "user_by_email"
+description = "Find user by email address"
+source = "prod_db"
+readonly = true
+statement = """
+  SELECT user_id, email, created_at, account_status
+  FROM users
+  WHERE email = $1
+"""
+
+[[tools.parameters]]
+name = "email"
+type = "string"
+description = "User email address"
+required = true
+```
+
+**Benefits**:
+- Consistent query patterns across team
+- Type-safe parameters
+- Built-in documentation via descriptions
+- Centralized query optimization
+
+## SSH Tunnel Best Practices
+
+### When to Use SSH Tunnels
+
+1. **Databases behind firewalls** - Production databases in private networks
+2. **Bastion host architectures** - Security requirement for database access
+3. **Multi-hop access** - Jump through multiple security layers
+4. **Encrypted connections** - Additional security layer for sensitive data
+
+### Key Management
+
+**Prefer key-based authentication over passwords**:
+
+```toml
+[[sources]]
+id = "prod_db"
+dsn = "postgres://app:***@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"  # Key-based (recommended)
+# ssh_password = "***"  # Avoid password auth when possible
+```
+
+**Passphrase-protected keys** (recommended for production):
+
+```toml
+ssh_key = "~/.ssh/id_ed25519"
+ssh_passphrase = "key_passphrase"  # Only if key is encrypted
+```
+
+### SSH Keepalive Configuration
+
+Prevent idle disconnections for long-running operations:
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:***@10.0.1.100:5432/app"
+ssh_host = "bastion.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+ssh_keepalive_interval = 60  # Send keepalive every 60 seconds
+ssh_keepalive_count_max = 3   # Disconnect after 3 missed responses
+```
+
+**Default values**: Keepalive is disabled by default (`interval = 0`).
+
+### ProxyJump for Multi-Hop Connections
+
+Connect through multiple jump hosts:
+
+```toml
+[[sources]]
+id = "internal_db"
+dsn = "postgres://app:***@10.0.2.50:5432/app"
+ssh_host = "internal-server.company.com"
+ssh_user = "deploy"
+ssh_key = "~/.ssh/id_ed25519"
+# Jump through bastion, then jump2
+ssh_proxy_jump = "bastion.company.com,admin@jump2.internal:2222"
+```
+
+From `src/utils/ssh-tunnel.ts:70-138`, connections are established sequentially through each jump host.
+
+## Connection Pooling and Timeouts
+
+### Connection Timeouts
+
+Set appropriate connection timeouts for remote databases:
+
+```toml
+[[sources]]
+id = "remote_db"
+dsn = "postgres://user:***@remote-db.example.com:5432/app"
+connection_timeout = 30  # Seconds to wait for initial connection
+```
+
+**Recommended values**:
+- Local databases: 5-10 seconds
+- Remote databases: 20-30 seconds
+- SSH tunnel connections: 30-60 seconds
+
+### Query Timeouts
+
+Prevent runaway queries:
+
+```toml
+[[sources]]
+id = "analytics_db"
+dsn = "postgres://user:***@analytics.example.com:5432/warehouse"
+query_timeout = 60  # Seconds per query (PostgreSQL, MySQL, MariaDB, SQL Server)
+```
+
+**Note**: SQLite does not support query timeouts at the protocol level.
+
+## Configuration Best Practices
+
+### TOML Over Environment Variables
+
+**Use TOML for multi-database setups**:
+
+```toml
+# dbhub.toml - version controlled, shareable
+[[sources]]
+id = "prod_read_replica"
+dsn = "postgres://readonly:${PROD_DB_PASSWORD}@prod-replica.example.com:5432/app"
+readonly = true
+
+[[sources]]
+id = "staging"
+dsn = "postgres://user:${STAGING_DB_PASSWORD}@staging.example.com:5432/app"
+```
+
+**Use .env for single-database or local development**:
+
+```bash
+# .env - local only, not committed
+DSN=postgres://postgres:postgres@localhost:5432/myapp
+```
+
+### Credential Management
+
+**Never commit secrets**:
+
+```bash
+# .gitignore
+.env
+.env.local
+dbhub.toml  # If it contains credentials
+```
+
+**Use environment variable substitution** (future feature) or:
+1. Keep `dbhub.toml.example` in version control
+2. Copy to `dbhub.toml` locally and add credentials
+3. Use cloud secret managers for production
+
+## Testing with Workbench
+
+### Test Queries Before Using in MCP Client
+
+The built-in workbench (`--transport http --port 8080`) allows:
+
+1. **Query validation** - Test SQL syntax before sending to Claude
+2. **Performance testing** - Measure query execution time
+3. **Result inspection** - Verify output format
+4. **Tool testing** - Execute custom tools interactively
+
+```bash
+# Start DBHub with workbench
+npx @bytebase/dbhub --transport http --port 8080 --config dbhub.toml
+
+# Open browser to http://localhost:8080
+# Test queries in the UI before using in Claude Desktop
+```
+
+### Request Tracing
+
+Workbench includes request traces for debugging:
+
+- View all executed queries
+- See execution times
+- Inspect parameters and results
+- Debug source routing in multi-database setups
+
+## Schema Search Path (PostgreSQL)
+
+### Custom Schema Configuration
+
+When working with non-public schemas:
+
+```toml
+[[sources]]
+id = "app_db"
+dsn = "postgres://user:***@localhost:5432/myapp"
+search_path = "myschema,public"  # Comma-separated, first is default
+```
+
+From `src/types/config.ts:54`:
+- First schema in the list becomes the default for schema discovery
+- Subsequent schemas are included in the search path
+- Affects `search_objects` results and unqualified table references
+
+## Performance Tips
+
+### 1. Use Specific Filters
+
+```typescript
+// Good: Narrow scope
+search_objects({
+  object_type: "column",
+  schema: "public",
+  table: "users",
+  pattern: "email"
+})
+
+// Avoid: Broad scope across all schemas
+search_objects({
+  object_type: "column",
+  pattern: "%"  // Searches every column in every table
+})
+```
+
+### 2. Leverage Detail Levels
+
+```typescript
+// Step 1: Get table names (fast)
+const tables = search_objects({
+  object_type: "table",
+  schema: "public",
+  detail_level: "names"
+})
+
+// Step 2: Get full details only for tables of interest
+const userTableDetails = search_objects({
+  object_type: "table",
+  schema: "public",
+  pattern: "users",
+  detail_level: "full"
+})
+```
+
+### 3. Set Realistic Limits
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "large_warehouse"
+max_rows = 100  # Start small, increase if needed
+```
+
+## Security Checklist
+
+- [ ] Use `readonly = true` for production databases
+- [ ] Set appropriate `max_rows` limits
+- [ ] Use SSH tunnels for remote database access
+- [ ] Prefer key-based SSH authentication
+- [ ] Enable SSL/TLS (`sslmode=require`) for network databases
+- [ ] Never commit `.env` or credential-containing TOML files
+- [ ] Use `lazy = true` for infrequently-accessed databases
+- [ ] Set connection and query timeouts
+- [ ] Test queries in workbench before production use
+- [ ] Document custom tools with clear descriptions

@@ -1,97 +1,247 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: DBHub Documentation
+description: Zero-dependency, token-efficient MCP server for connecting AI clients to PostgreSQL, MySQL, SQL Server, MariaDB, and SQLite databases
+mode: custom
 ---
 
-## Setting up
+<div className="relative overflow-hidden dark:bg-[#0f1117] bg-white">
+  {/* Hero Section */}
+  <div className="relative py-20 px-4 sm:px-6 lg:px-8">
+    <div className="max-w-7xl mx-auto">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        {/* Hero Content */}
+        <div className="lg:col-span-7">
+          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold dark:text-white text-gray-900 mb-6">
+            Connect AI to Your Databases
+          </h1>
+          <p className="text-lg sm:text-xl dark:text-gray-400 text-gray-600 mb-8 max-w-2xl">
+            DBHub is a zero-dependency MCP server that bridges Claude, Cursor, and other AI clients with PostgreSQL, MySQL, SQL Server, MariaDB, and SQLite databases. Token-efficient, secure, and built for local development.
+          </p>
+          <div className="flex flex-wrap gap-4">
+            <a 
+              href="/quickstart" 
+              className="inline-flex items-center px-6 py-3 rounded-lg font-semibold transition-colors bg-[#eecc3a] text-[#222739] hover:bg-[#f5d96b]"
+            >
+              Get Started
+              <svg className="ml-2 w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </a>
+            <a 
+              href="/installation" 
+              className="inline-flex items-center px-6 py-3 rounded-lg font-semibold transition-colors border dark:border-[#27272a] border-gray-200 dark:bg-[#1a1d27] bg-gray-50 dark:text-white text-gray-900 dark:hover:bg-[#242838] hover:bg-gray-100"
+            >
+              Installation Guide
+            </a>
+          </div>
+        </div>
+        
+        {/* Hero Image/Visual */}
+        <div className="lg:col-span-5 hidden lg:block">
+          <div className="dark:bg-[#1a1d27] bg-gray-50 rounded-2xl p-8 dark:border-[#27272a] border-gray-200 border">
+            <pre className="text-sm dark:text-gray-300 text-gray-700 overflow-x-auto">
+              <code>{`MCP Clients        DBHub         Databases
+    │              │              │
+    │              │              │
+Claude ─────┐      │              │
+            │      │              │
+Cursor ─────┼─────▶│──────────┐   │
+            │      │          │   │
+VS Code ────┘      │          ├──▶ PostgreSQL
+                   │          │
+                   │          ├──▶ MySQL
+                   │          │
+                   │          ├──▶ SQL Server
+                   │          │
+                   │          ├──▶ MariaDB
+                   │          │
+                   │          └──▶ SQLite`}</code>
+            </pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-Get your documentation site up and running in minutes.
+  {/* Quick Start Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-2xl sm:text-3xl font-bold dark:text-white text-gray-900 mb-4">Quick Start</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Get DBHub running in minutes with Docker, npm, or demo mode.</p>
+    
+    <Steps>
+      <Step title="Run DBHub with Docker">
+        Launch DBHub with your database connection string:
+        
+        ```bash Docker
+        docker run --rm --init \
+          --name dbhub \
+          --publish 8080:8080 \
+          bytebase/dbhub \
+          --transport http \
+          --port 8080 \
+          --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ```
+        
+        <Note>Replace the DSN with your actual database connection details. DBHub supports PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite.</Note>
+      </Step>
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
+      <Step title="Or use npm to run DBHub">
+        No Docker? Run directly with npx:
+        
+        ```bash npm
+        npx @bytebase/dbhub@latest \
+          --transport http \
+          --port 8080 \
+          --dsn "postgres://user:password@localhost:5432/dbname?sslmode=disable"
+        ```
+      </Step>
 
-## Make it yours
+      <Step title="Try demo mode (no database required)">
+        Explore DBHub with a built-in SQLite employee database:
+        
+        ```bash Demo Mode
+        npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+        ```
+        
+        <Info>Demo mode is perfect for testing DBHub's capabilities without connecting to a real database.</Info>
+      </Step>
 
-Design a docs site that looks great and empowers your users.
+      <Step title="Access the workbench">
+        Open your browser to `http://localhost:8080` to access the built-in web workbench. Execute queries, explore schemas, and test MCP tools visually.
+        
+        <Tip>The workbench provides a visual interface for all DBHub tools without requiring an MCP client.</Tip>
+      </Step>
+    </Steps>
+  </div>
 
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
+  {/* Key Features Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-2xl sm:text-3xl font-bold dark:text-white text-gray-900 mb-4">Key Features</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Built for AI-powered database workflows with developer experience in mind.</p>
+    
+    <CardGroup cols={2}>
+      <Card title="Zero Dependencies" icon="feather" href="/introduction">
+        Lightweight MCP server with no external dependencies. Just two powerful tools to maximize your context window.
+      </Card>
+      <Card title="Multi-Database Support" icon="database" href="/connectors/overview">
+        Connect to PostgreSQL, MySQL, MariaDB, SQL Server, and SQLite through a unified interface.
+      </Card>
+      <Card title="Token-Efficient Schema Exploration" icon="magnifying-glass" href="/tools/search-objects">
+        Progressive disclosure design minimizes token usage while exploring database schemas, tables, and columns.
+      </Card>
+      <Card title="Multi-Connection Configuration" icon="diagram-project" href="/config/toml">
+        Manage multiple database connections simultaneously with TOML configuration files.
+      </Card>
+      <Card title="Secure Access" icon="shield" href="/connectors/ssh-tunnels">
+        SSH tunneling and SSL/TLS encryption for secure database connections through bastion hosts.
+      </Card>
+      <Card title="Built-in Workbench" icon="browser" href="/workbench/overview">
+        Web interface for executing queries and testing MCP tools without an MCP client.
+      </Card>
+      <Card title="Query Guardrails" icon="lock" href="/guides/security">
+        Read-only mode, row limiting, and query timeouts to prevent runaway operations.
+      </Card>
+      <Card title="Custom Tools" icon="wrench" href="/tools/custom-tools">
+        Define reusable, parameterized SQL operations in your configuration file.
+      </Card>
+    </CardGroup>
+  </div>
 
-## Create beautiful pages
+  {/* MCP Tools Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-2xl sm:text-3xl font-bold dark:text-white text-gray-900 mb-4">MCP Tools</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">DBHub implements three core MCP tools for database operations.</p>
+    
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <a href="/tools/execute-sql" className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 overflow-hidden no-underline dark:bg-[#1a1d27] bg-white transition-colors dark:hover:border-[#eecc3a] hover:border-[#eecc3a]">
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">execute_sql</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-4">Execute SQL queries with transaction support, safety controls, and row limiting.</p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#eecc3a] group-hover:text-[#eecc3a] transition-colors">
+            Learn more
+            <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+      
+      <a href="/tools/search-objects" className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 overflow-hidden no-underline dark:bg-[#1a1d27] bg-white transition-colors dark:hover:border-[#eecc3a] hover:border-[#eecc3a]">
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">search_objects</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-4">Search and explore database schemas, tables, columns, indexes, and procedures with progressive disclosure.</p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#eecc3a] group-hover:text-[#eecc3a] transition-colors">
+            Learn more
+            <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+      
+      <a href="/tools/custom-tools" className="group block rounded-2xl border dark:border-[#27272a] border-gray-200 overflow-hidden no-underline dark:bg-[#1a1d27] bg-white transition-colors dark:hover:border-[#eecc3a] hover:border-[#eecc3a]">
+        <div className="p-6">
+          <h3 className="text-base font-semibold dark:text-white text-gray-900 mb-2">Custom Tools</h3>
+          <p className="text-sm dark:text-gray-400 text-gray-600 mb-4">Define reusable, parameterized SQL operations in your dbhub.toml configuration file.</p>
+          <div className="flex items-center text-sm dark:text-gray-400 text-gray-600 dark:group-hover:text-[#eecc3a] group-hover:text-[#eecc3a] transition-colors">
+            Learn more
+            <svg className="ml-1 w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+          </div>
+        </div>
+      </a>
+    </div>
+  </div>
 
-Everything you need to create world-class documentation.
+  {/* Database Connectors Section */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <h2 className="text-2xl sm:text-3xl font-bold dark:text-white text-gray-900 mb-4">Supported Databases</h2>
+    <p className="text-base dark:text-gray-400 text-gray-600 mb-8">Connect to any of these databases through a unified MCP interface.</p>
+    
+    <CardGroup cols={3}>
+      <Card title="PostgreSQL" icon="elephant" href="/connectors/postgresql">
+        Full support for PostgreSQL with schemas, procedures, and advanced features.
+      </Card>
+      <Card title="MySQL" icon="database" href="/connectors/mysql">
+        Connect to MySQL databases with full schema exploration support.
+      </Card>
+      <Card title="MariaDB" icon="database" href="/connectors/mariadb">
+        MariaDB connector with compatibility for MySQL workflows.
+      </Card>
+      <Card title="SQL Server" icon="server" href="/connectors/sqlserver">
+        Microsoft SQL Server support including named instances and NTLM authentication.
+      </Card>
+      <Card title="SQLite" icon="cube" href="/connectors/sqlite">
+        Lightweight SQLite support for file-based and in-memory databases.
+      </Card>
+      <Card title="SSH Tunnels" icon="key" href="/connectors/ssh-tunnels">
+        Secure connections through SSH tunnels with key-based or password authentication.
+      </Card>
+    </CardGroup>
+  </div>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+  {/* Closing CTA */}
+  <div className="mt-16 mb-16 max-w-5xl mx-auto px-6">
+    <div className="rounded-2xl dark:bg-[#1a1d27] bg-gray-50 dark:border-[#27272a] border-gray-200 border p-8 sm:p-12 text-center">
+      <h2 className="text-2xl sm:text-3xl font-bold dark:text-white text-gray-900 mb-4">Ready to Connect AI to Your Database?</h2>
+      <p className="text-base dark:text-gray-400 text-gray-600 mb-6 max-w-2xl mx-auto">
+        Get started with DBHub in minutes. Zero dependencies, token-efficient, and built for local development.
+      </p>
+      <div className="flex flex-wrap gap-4 justify-center">
+        <a 
+          href="/quickstart" 
+          className="inline-flex items-center px-6 py-3 rounded-lg font-semibold transition-colors bg-[#eecc3a] text-[#222739] hover:bg-[#f5d96b]"
+        >
+          Get Started Now
+        </a>
+        <a 
+          href="https://github.com/bytebase/dbhub" 
+          className="inline-flex items-center px-6 py-3 rounded-lg font-semibold transition-colors border dark:border-[#27272a] border-gray-200 dark:bg-[#0f1117] bg-white dark:text-white text-gray-900 dark:hover:bg-[#1a1d27] hover:bg-gray-50"
+        >
+          View on GitHub
+        </a>
+      </div>
+    </div>
+  </div>
+</div>

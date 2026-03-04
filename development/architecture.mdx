@@ -1,0 +1,473 @@
+---
+title: Architecture
+description: DBHub's modular architecture and design patterns
+---
+
+## Overview
+
+DBHub follows a modular architecture centered around the Model Context Protocol (MCP). The design emphasizes:
+
+- **Modular Connectors**: Database-specific implementations behind a common interface
+- **Transport Abstraction**: Support for both stdio (desktop tools) and HTTP (network clients)
+- **Token Efficiency**: Progressive disclosure patterns to minimize context window usage
+- **Multi-Source Support**: Connect to multiple databases simultaneously
+- **Type Safety**: TypeScript strict mode throughout
+
+## Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      MCP Clients                            │
+│   (Claude Desktop, Claude Code, Cursor, VS Code, etc.)     │
+└────────────────────┬────────────────────────────────────────┘
+                     │ MCP Protocol
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Transport Layer                          │
+│  ┌──────────────┐              ┌──────────────┐            │
+│  │ StdioTransport│              │ HTTPTransport│            │
+│  │  (Desktop)    │              │  (Network)   │            │
+│  └──────────────┘              └──────────────┘            │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      MCP Server                             │
+│  ┌─────────────────────────────────────────────────┐       │
+│  │              Tool Registry                       │       │
+│  │  - execute_sql                                   │       │
+│  │  - search_objects                                │       │
+│  │  - custom tools (from TOML config)               │       │
+│  └─────────────────────────────────────────────────┘       │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+                     ▼
+┌─────────────────────────────────────────────────────────────┐
+│                 Connector Manager                           │
+│  - Multi-source routing (Map<sourceId, Connector>)         │
+│  - SSH tunnel management                                    │
+│  - Lazy connection support                                  │
+│  - Configuration validation                                 │
+└────────────────────┬────────────────────────────────────────┘
+                     │
+         ┌───────────┼───────────┬──────────┬─────────┐
+         ▼           ▼           ▼          ▼         ▼
+   ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────┐ ┌────────┐
+   │PostgreSQL│ │  MySQL  │ │MariaDB │ │SQLite│ │SQL Svr │
+   │Connector │ │Connector│ │Connector│ │Conn. │ │Conn.   │
+   └─────────┘ └─────────┘ └─────────┘ └──────┘ └────────┘
+```
+
+## Core Components
+
+### Connector Registry Pattern
+
+The Connector Registry provides dynamic registration and discovery of database connectors.
+
+**Location**: `src/connectors/interface.ts:210-266`
+
+```typescript
+export class ConnectorRegistry {
+  private static connectors: Map<ConnectorType, Connector> = new Map();
+
+  static register(connector: Connector): void {
+    ConnectorRegistry.connectors.set(connector.id, connector);
+  }
+
+  static getConnector(id: ConnectorType): Connector | null {
+    return ConnectorRegistry.connectors.get(id) || null;
+  }
+
+  static getConnectorForDSN(dsn: string): Connector | null {
+    for (const connector of ConnectorRegistry.connectors.values()) {
+      if (connector.dsnParser.isValidDSN(dsn)) {
+        return connector;
+      }
+    }
+    return null;
+  }
+}
+```
+
+**Key Features:**
+- Automatic connector discovery based on DSN format
+- Type-safe connector lookup
+- Sample DSN generation for documentation
+- Singleton pattern for global access
+
+### Connector Manager
+
+The Connector Manager orchestrates multi-database connections and lifecycle management.
+
+**Location**: `src/connectors/manager.ts`
+
+**Core Responsibilities:**
+
+1. **Multi-Source Support**: Maintains a `Map<sourceId, Connector>` for named connections
+2. **Connection Lifecycle**: Handles connect/disconnect for all sources
+3. **SSH Tunnel Management**: Establishes and manages SSH tunnels per source
+4. **Lazy Connections**: Defers connection until first use (optional)
+5. **Default Source**: First configured source is the default when no `source_id` specified
+
+**Key Methods:**
+
+```typescript
+class ConnectorManager {
+  // Connect to multiple databases from TOML config
+  async connectWithSources(sources: SourceConfig[]): Promise<void>
+
+  // Get connector by source ID (or default)
+  getConnector(sourceId?: string): Connector
+
+  // Ensure a lazy source is connected on-demand
+  async ensureConnected(sourceId?: string): Promise<void>
+
+  // Static method for tool handlers
+  static getCurrentConnector(sourceId?: string): Connector
+
+  // Disconnect all sources and close SSH tunnels
+  async disconnect(): Promise<void>
+}
+```
+
+**Multi-Source Flow:**
+
+```
+1. Load TOML config → Multiple SourceConfig objects
+2. For each source:
+   a. Build DSN from config
+   b. Establish SSH tunnel (if configured)
+   c. Find matching connector via ConnectorRegistry
+   d. Clone connector (new instance for isolation)
+   e. Connect with source-specific config
+   f. Store in Map<sourceId, Connector>
+3. Tools route requests via source_id parameter
+```
+
+### Tool Handlers
+
+Tool handlers implement MCP protocol tools with clean separation of concerns.
+
+**Location**: `src/tools/`
+
+**execute_sql** (`src/tools/execute-sql.ts`):
+- Execute SQL queries with parameterized inputs
+- Apply row limits and read-only restrictions
+- Transaction support (multi-statement execution)
+- Request tracking and logging
+
+**search_objects** (`src/tools/search-objects.ts`):
+- Unified search/list tool with progressive disclosure
+- Pattern-based search (SQL LIKE syntax: `%`, `_`)
+- Detail levels: `names` (minimal), `summary` (metadata), `full` (complete)
+- Object types: schemas, tables, columns, procedures, functions, indexes
+- Token-efficient design inspired by Anthropic's MCP patterns
+
+**Tool Registration:**
+
+Tools accept an optional `source_id` parameter for multi-database routing:
+
+```typescript
+// Single source mode (backward compatible)
+execute_sql(sql: "SELECT * FROM users")
+
+// Multi-source mode
+execute_sql(sql: "SELECT * FROM users", source_id: "prod_db")
+execute_sql(sql: "SELECT * FROM orders", source_id: "staging_db")
+```
+
+### Transport Abstraction
+
+DBHub supports two transport modes for different use cases.
+
+**Location**: `src/server.ts:240-253`
+
+#### Stdio Transport (Desktop Tools)
+
+```typescript
+const transport = new StdioServerTransport();
+await server.connect(transport);
+```
+
+- Default transport for MCP desktop clients
+- JSON-RPC over stdin/stdout
+- Single persistent connection
+- Used by: Claude Desktop, Claude Code, Cursor
+
+#### HTTP Transport (Network Clients)
+
+```typescript
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: undefined, // Stateless mode
+  enableJsonResponse: true       // No SSE support
+});
+```
+
+**Endpoint**: `POST /mcp`
+
+- Stateless mode: New server instance per request
+- JSON request/response (no Server-Sent Events)
+- Prevents request ID collisions in concurrent scenarios
+- Includes workbench UI and REST API
+
+**Why Stateless?**
+
+A single shared server instance would cause request ID collisions when multiple clients send requests concurrently. Creating a new instance per request ensures complete isolation.
+
+### Token-Efficient Schema Exploration
+
+DBHub uses progressive disclosure to minimize token usage when exploring database schemas.
+
+**Location**: `src/tools/search-objects.ts`
+
+**Design Pattern:**
+
+```typescript
+// Step 1: List tables (minimal tokens)
+search_objects(object_type="table", detail_level="names")
+// Returns: [{ name: "users", schema: "public" }]
+
+// Step 2: Get summary (metadata only)
+search_objects(object_type="table", pattern="users", detail_level="summary")
+// Returns: { name: "users", column_count: 4, row_count: 1523 }
+
+// Step 3: Get full details (complete structure)
+search_objects(object_type="table", pattern="users", detail_level="full")
+// Returns: Complete columns, indexes, constraints
+```
+
+**Benefits:**
+- Reduces initial token usage by 10-20x
+- Progressive exploration as needed
+- Default to minimal information
+- Inspired by Anthropic's MCP code execution patterns
+
+**Implementation:**
+
+```typescript
+export type DetailLevel = "names" | "summary" | "full";
+
+switch (detail_level) {
+  case "names":
+    return tables.map(name => ({ name, schema }));
+  case "summary":
+    return tables.map(async t => ({
+      name: t,
+      column_count: (await getTableSchema(t)).length,
+      row_count: await getTableRowCount(t)
+    }));
+  case "full":
+    return tables.map(async t => ({
+      ...summary,
+      columns: await getTableSchema(t),
+      indexes: await getTableIndexes(t)
+    }));
+}
+```
+
+### DSN Parsing and Validation
+
+Each connector implements a DSN parser for connection string handling.
+
+**Location**: `src/connectors/interface.ts:82-104`
+
+**Interface:**
+
+```typescript
+export interface DSNParser {
+  // Parse DSN into connector-specific config
+  parse(dsn: string, config?: ConnectorConfig): Promise<any>;
+
+  // Generate sample DSN for documentation
+  getSampleDSN(): string;
+
+  // Validate DSN format
+  isValidDSN(dsn: string): boolean;
+}
+```
+
+**Example DSN Formats:**
+
+- PostgreSQL: `postgres://user:password@localhost:5432/dbname?sslmode=require`
+- MySQL: `mysql://user:password@localhost:3306/dbname`
+- SQL Server: `sqlserver://user:password@localhost:1433/dbname?instanceName=ENV1`
+- SQLite: `sqlite:///path/to/database.db` or `sqlite:///:memory:`
+
+**Security Features:**
+
+- Password obfuscation in logs (`src/utils/dsn-obfuscate.ts`)
+- SSL/TLS support via query parameters
+- Validation before connection attempts
+
+### SQL Statement Parsing
+
+DBHub includes a dialect-aware SQL parser for handling comments, strings, and statement splitting.
+
+**Location**: `src/utils/sql-parser.ts`
+
+**Key Functions:**
+
+```typescript
+// Remove comments and string literals (for keyword validation)
+stripCommentsAndStrings(sql: string, dialect?: ConnectorType): string
+
+// Split multi-statement SQL safely
+splitSQLStatements(sql: string, dialect?: ConnectorType): string[]
+```
+
+**Dialect Support:**
+
+- **PostgreSQL**: Nested multi-line comments (`/* /* nested */ */`), dollar quotes (`$$`, `$tag$`)
+- **MySQL/MariaDB**: Backtick identifiers (\`column\`)
+- **SQLite**: Backtick and bracket identifiers (\`col\`, `[col]`)
+- **SQL Server**: Bracket identifiers (`[column]`)
+- **ANSI SQL**: Single/double quotes, `--` and `/* */` comments
+
+**Why Important?**
+
+Prevents false positives when validating read-only SQL:
+
+```sql
+-- This is safe (DELETE is in a comment)
+-- DELETE FROM users;
+SELECT * FROM users WHERE name = 'DELETE';
+```
+
+The parser correctly ignores keywords in comments and strings.
+
+## Request Tracking and Logging
+
+DBHub tracks all tool requests for debugging and monitoring.
+
+**Location**: `src/utils/tool-handler-helpers.ts`
+
+**Tracked Information:**
+- Source ID
+- Tool name
+- SQL statement (or search parameters)
+- Execution time
+- Success/failure status
+- Error messages
+
+**Access via API:**
+
+```bash
+GET /api/requests
+```
+
+Returns recent requests with timing and status information.
+
+## Configuration System
+
+DBHub supports multiple configuration methods with a clear priority order.
+
+**Priority (highest to lowest):**
+
+1. Command-line arguments (`--dsn`, `--config`, etc.)
+2. TOML configuration file (`dbhub.toml`)
+3. Environment variables (`DSN`, `DB_HOST`, etc.)
+4. `.env` files (`.env.local` in dev, `.env` in prod)
+
+**TOML Configuration** (`src/config/toml-loader.ts`):
+
+```toml
+[[sources]]
+id = "prod_pg"
+dsn = "postgres://user:pass@localhost:5432/production"
+connection_timeout = 60
+query_timeout = 30
+readonly = true
+
+[[sources]]
+id = "staging_mysql"
+type = "mysql"
+host = "localhost"
+database = "staging"
+user = "root"
+password = "secret"
+
+[[tools]]
+name = "execute_sql"
+source = "prod_pg"
+readonly = true
+max_rows = 1000
+```
+
+**Features:**
+- Multi-source definitions with unique IDs
+- Per-source settings (SSH tunnels, timeouts, SSL)
+- Per-tool settings (readonly, max_rows)
+- Custom tool definitions
+- Path expansion (`~/` → home directory)
+- Automatic password redaction in logs
+
+## Design Patterns
+
+### Connector Cloning
+
+Each connector supports cloning for multi-source isolation:
+
+```typescript
+interface Connector {
+  clone(): Connector; // Create new instance with clean state
+}
+```
+
+This prevents state sharing between database connections.
+
+### Resource Management
+
+Always use `try/finally` for database clients:
+
+```typescript
+const client = await this.pool.connect();
+try {
+  const result = await client.query(sql);
+  return result;
+} finally {
+  client.release(); // Always release, even on error
+}
+```
+
+### Error Context
+
+Provide actionable error messages:
+
+```typescript
+throw new Error(
+  `Source '${sourceId}' not found. Available sources: ${this.sourceIds.join(", ")}`
+);
+```
+
+## Performance Considerations
+
+1. **Connection Pooling**: Each connector uses connection pools (pg.Pool, mysql2.Pool, etc.)
+2. **Lazy Connections**: Optional deferred connection for unused sources
+3. **Query Timeouts**: Prevent runaway queries with configurable timeouts
+4. **Row Limiting**: Database-native LIMIT clauses (not application-level filtering)
+5. **Progressive Schema Loading**: Fetch metadata only when needed
+
+## Security Architecture
+
+1. **Read-Only Mode**: SDK-level enforcement via database session settings
+2. **Keyword Validation**: Application-level SQL validation before execution
+3. **SSH Tunneling**: Secure connections through bastion hosts
+4. **SSL/TLS**: Encryption for database connections
+5. **DSN Obfuscation**: Passwords redacted in all logs and error messages
+6. **Parameterized Queries**: SQL injection prevention
+
+## Testing Architecture
+
+See [Testing Guide](/development/testing) for complete details.
+
+**Key Principles:**
+- Unit tests for utilities and parsers
+- Integration tests with Testcontainers for real databases
+- Shared test base for consistent connector testing
+- Pre-commit hooks for fast feedback
+
+## Next Steps
+
+- [Building Connectors](/development/building-connectors) - Add new database support
+- [Testing Guide](/development/testing) - Write and run tests
+- [Development Overview](/development/overview) - Contributing guidelines

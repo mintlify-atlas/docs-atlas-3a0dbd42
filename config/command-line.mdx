@@ -1,0 +1,343 @@
+---
+title: Command-Line Configuration
+description: Configure DBHub using command-line flags for quick setup and overrides
+---
+
+Command-line flags provide the highest priority configuration method in DBHub. Use these for quick testing, temporary overrides, or when you need to specify configuration at runtime.
+
+## Configuration Priority
+
+DBHub resolves configuration in this order (highest to lowest priority):
+
+1. **Command-line arguments** (highest priority)
+2. TOML config file (`--config` or `./dbhub.toml`)
+3. Environment variables
+4. `.env` files (`.env.local` in development, `.env` in production)
+
+<Note>
+  Command-line arguments override all other configuration sources, making them ideal for testing or temporary changes.
+</Note>
+
+## Database Connection
+
+### DSN Connection String
+
+The `--dsn` flag accepts a full database connection string:
+
+```bash
+pnpm run dev -- --dsn="postgres://user:password@localhost:5432/dbname"
+```
+
+<ParamField path="--dsn" type="string">
+  Database connection string in URL format. Supports all database types.
+  
+  **Format:** `protocol://[user[:password]@]host[:port]/database[?options]`
+</ParamField>
+
+#### DSN Examples by Database Type
+
+<CodeGroup>
+
+```bash PostgreSQL
+pnpm run dev -- --dsn="postgres://postgres:secret@localhost:5432/myapp"
+
+# With SSL
+pnpm run dev -- --dsn="postgres://user:pass@db.example.com:5432/prod?sslmode=require"
+```
+
+```bash MySQL
+pnpm run dev -- --dsn="mysql://root:mysql@localhost:3306/myapp"
+
+# With SSL
+pnpm run dev -- --dsn="mysql://user:pass@db.example.com:3306/prod?sslmode=require"
+```
+
+```bash MariaDB
+pnpm run dev -- --dsn="mariadb://root:mariadb@localhost:3306/myapp"
+```
+
+```bash SQL Server
+pnpm run dev -- --dsn="sqlserver://sa:YourStrong@Pass@localhost:1433/myapp"
+
+# Named instance
+pnpm run dev -- --dsn="sqlserver://user:pass@server:1433/db?instanceName=SQLEXPRESS"
+
+# Windows/NTLM authentication
+pnpm run dev -- --dsn="sqlserver://user:pass@server:1433/db?authentication=ntlm&domain=CORP"
+```
+
+```bash SQLite
+# File-based
+pnpm run dev -- --dsn="sqlite:///path/to/database.db"
+
+# In-memory
+pnpm run dev -- --dsn="sqlite:///:memory:"
+
+# Home directory expansion
+pnpm run dev -- --dsn="sqlite:///~/data/myapp.db"
+```
+
+</CodeGroup>
+
+<Warning>
+  If your password contains special characters like `@`, `:`, `/`, or `#`, they must be URL-encoded in the DSN, or use [environment variables](/config/environment) with individual connection parameters instead.
+</Warning>
+
+### Demo Mode
+
+<ParamField path="--demo" type="boolean" default="false">
+  Launch DBHub with an in-memory SQLite database pre-populated with sample employee data. Perfect for testing and exploration.
+</ParamField>
+
+```bash
+pnpm run dev -- --demo
+```
+
+Demo mode:
+- Creates an in-memory SQLite database
+- Pre-loads sample employee data (employees, departments, salaries)
+- Requires no additional configuration
+- Data is lost when the server stops
+
+## Transport Configuration
+
+### Transport Mode
+
+<ParamField path="--transport" type="string" default="stdio">
+  MCP server transport protocol.
+  
+  **Options:**
+  - `stdio` - Standard input/output (for Claude Desktop, Claude Code, Cursor)
+  - `http` - HTTP transport with JSON responses (for network clients)
+</ParamField>
+
+```bash
+# Default stdio transport (for desktop clients)
+pnpm run dev
+
+# HTTP transport (for network clients or testing)
+pnpm run dev -- --transport=http
+```
+
+<Info>
+  **stdio mode:** Direct communication via standard input/output. Use with Claude Desktop, Claude Code, and Cursor.
+  
+  **http mode:** RESTful API at `http://localhost:8080/mcp`. Includes the workbench UI for testing tools.
+</Info>
+
+### HTTP Server Port
+
+<ParamField path="--port" type="number" default="8080">
+  HTTP server port number. Only applicable when using `--transport=http`.
+</ParamField>
+
+```bash
+pnpm run dev -- --transport=http --port=3000
+```
+
+The port controls:
+- MCP endpoint: `http://localhost:{port}/mcp`
+- Workbench UI: `http://localhost:{port}/`
+- API endpoints: `http://localhost:{port}/api/*`
+
+## SSH Tunnel Options
+
+Connect to databases through SSH bastion hosts:
+
+<ParamField path="--ssh-host" type="string">
+  SSH server hostname or IP address. Can be an alias from `~/.ssh/config`.
+</ParamField>
+
+<ParamField path="--ssh-port" type="number" default="22">
+  SSH server port number.
+</ParamField>
+
+<ParamField path="--ssh-user" type="string" required>
+  SSH username for authentication.
+</ParamField>
+
+<ParamField path="--ssh-password" type="string">
+  SSH password authentication. Use either this or `--ssh-key`.
+</ParamField>
+
+<ParamField path="--ssh-key" type="string">
+  Path to SSH private key file. Use either this or `--ssh-password`.
+  
+  Supports `~/` expansion (e.g., `~/.ssh/id_ed25519`).
+</ParamField>
+
+<ParamField path="--ssh-passphrase" type="string">
+  Passphrase for encrypted SSH private key.
+</ParamField>
+
+<ParamField path="--ssh-proxy-jump" type="string">
+  Comma-separated list of jump hosts for multi-hop SSH connections.
+  
+  **Format:** `[user@]host[:port],[user@]host[:port],...`
+</ParamField>
+
+<ParamField path="--ssh-keepalive-interval" type="number" default="0">
+  Seconds between SSH keepalive packets. Set to 0 to disable.
+</ParamField>
+
+<ParamField path="--ssh-keepalive-count-max" type="number" default="3">
+  Maximum number of missed keepalive responses before disconnecting.
+</ParamField>
+
+### SSH Tunnel Examples
+
+<CodeGroup>
+
+```bash Password Authentication
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="bastion.company.com" \
+  --ssh-user="deploy" \
+  --ssh-password="secret"
+```
+
+```bash Key Authentication
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="bastion.company.com" \
+  --ssh-user="deploy" \
+  --ssh-key="~/.ssh/id_ed25519"
+```
+
+```bash Encrypted Key
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="bastion.company.com" \
+  --ssh-user="deploy" \
+  --ssh-key="~/.ssh/id_rsa" \
+  --ssh-passphrase="keypassword"
+```
+
+```bash SSH Config Alias
+# Uses settings from ~/.ssh/config
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="prod-bastion"
+```
+
+```bash Multi-Hop (ProxyJump)
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="internal-server" \
+  --ssh-user="deploy" \
+  --ssh-key="~/.ssh/id_ed25519" \
+  --ssh-proxy-jump="bastion.company.com,admin@jump2:2222"
+```
+
+```bash With Keepalive
+pnpm run dev -- \
+  --dsn="postgres://user:pass@10.0.1.100:5432/prod" \
+  --ssh-host="bastion.company.com" \
+  --ssh-user="deploy" \
+  --ssh-key="~/.ssh/id_ed25519" \
+  --ssh-keepalive-interval=60 \
+  --ssh-keepalive-count-max=3
+```
+
+</CodeGroup>
+
+<Tip>
+  DBHub automatically reads SSH configuration from `~/.ssh/config` when using host aliases. This reduces the number of flags you need to specify.
+</Tip>
+
+## Advanced Options
+
+### Custom Config File
+
+<ParamField path="--config" type="string">
+  Path to TOML configuration file. If not specified, DBHub looks for `./dbhub.toml` in the current directory.
+</ParamField>
+
+```bash
+pnpm run dev -- --config=/path/to/custom-config.toml
+```
+
+See [TOML Configuration](/config/toml) for details on multi-database setup and advanced configuration.
+
+### Source ID (Single Database Only)
+
+<ParamField path="--id" type="string" default="default">
+  Custom identifier for the database source. Only applicable when using `--dsn` (not with TOML config).
+  
+  Affects tool naming: `execute_sql_{id}`, `search_objects_{id}`
+</ParamField>
+
+```bash
+# Tools will be named: execute_sql_prod, search_objects_prod
+pnpm run dev -- --dsn="postgres://..." --id=prod
+```
+
+<Warning>
+  The `--id` flag cannot be used with TOML configuration. TOML files define source IDs directly in the `[[sources]]` sections.
+</Warning>
+
+## Deprecated Options
+
+The following flags have been removed and will cause an error if used:
+
+<Warning>
+  **Removed in current version:**
+  - `--readonly` - Use TOML `[[tools]]` configuration instead
+  - `--max-rows` - Use TOML `[[tools]]` configuration instead
+  
+  See [execute_sql tool configuration](/tools/execute-sql) for migration guidance.
+</Warning>
+
+## SSL/TLS Options
+
+SSL mode is specified in the DSN query string:
+
+```bash
+# Disable SSL (local development)
+pnpm run dev -- --dsn="postgres://user:pass@localhost:5432/db?sslmode=disable"
+
+# Require SSL (production)
+pnpm run dev -- --dsn="postgres://user:pass@db.prod:5432/db?sslmode=require"
+```
+
+**Supported modes:**
+- `sslmode=disable` - No SSL encryption
+- `sslmode=require` - SSL encryption without certificate verification
+
+<Note>
+  SSL options are only applicable to network databases (PostgreSQL, MySQL, MariaDB, SQL Server). SQLite does not support SSL.
+</Note>
+
+## Complete Example
+
+Combining multiple options:
+
+```bash
+pnpm run dev -- \
+  --dsn="postgres://app:secret@10.0.1.50:5432/myapp?sslmode=require" \
+  --ssh-host="bastion.company.com" \
+  --ssh-user="deploy" \
+  --ssh-key="~/.ssh/id_ed25519" \
+  --ssh-keepalive-interval=60 \
+  --transport=http \
+  --port=8080 \
+  --id=prod
+```
+
+This configuration:
+- Connects to PostgreSQL with SSL required
+- Routes through SSH bastion with key authentication
+- Sends keepalive packets every 60 seconds
+- Serves HTTP transport on port 8080
+- Names tools `execute_sql_prod` and `search_objects_prod`
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Variables" icon="file-code" href="/config/environment">
+    Configure via .env files for persistent settings
+  </Card>
+  <Card title="TOML Configuration" icon="database" href="/config/toml">
+    Set up multiple databases with advanced options
+  </Card>
+</CardGroup>

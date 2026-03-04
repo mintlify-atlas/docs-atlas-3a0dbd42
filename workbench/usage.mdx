@@ -1,0 +1,530 @@
+---
+title: Workbench Usage
+description: Detailed guide to using the DBHub workbench UI
+---
+
+The DBHub workbench provides an intuitive interface for executing queries, testing custom tools, and monitoring request activity. This guide covers the main UI components and common workflows.
+
+## UI Components
+
+### Sidebar Navigation
+
+The left sidebar provides access to all data sources and their tools:
+
+- **Data Source List**: Shows all configured databases (from TOML or single DSN)
+- **Tool List**: Displays available MCP tools for the selected source
+- **Lock Icon**: Indicates read-only tools (restricted to SELECT, SHOW, etc.)
+- **Source Badge**: Shows database type icons (PostgreSQL, MySQL, etc.)
+
+Click any data source name to view connection details and available tools. Tools are displayed with their parameter counts and descriptions.
+
+### Top Navigation
+
+The workbench includes these main sections:
+
+- **Home** - Redirects to the first available data source
+- **Source Detail** - Connection information and tool listing
+- **Tool Detail** - Interactive query editor and execution interface
+- **Recent Requests** - Request history and traces
+
+### SQL Editor
+
+The SQL editor appears when using `execute_sql` tools or custom tools:
+
+**Features:**
+
+- Syntax highlighting for SQL statements
+- Multi-line editing with auto-indentation
+- Line numbers and bracket matching
+- Keyboard shortcut: `Cmd+Enter` (Mac) or `Ctrl+Enter` (Windows/Linux) to execute
+- Execute selection: Select SQL text and press `Cmd+Enter` to run only the selected portion
+
+**Example:**
+
+```sql
+-- Write your query
+SELECT 
+  id,
+  name,
+  email,
+  created_at
+FROM users
+WHERE status = 'active'
+ORDER BY created_at DESC
+LIMIT 50;
+```
+
+Press the **Run** button or use the keyboard shortcut to execute.
+
+### Parameter Forms
+
+Custom tools display interactive parameter forms above the SQL editor:
+
+**Input Types:**
+
+- **String**: Text input field
+- **Number/Integer**: Numeric input with validation
+- **Boolean**: Checkbox or toggle
+
+**Visual Indicators:**
+
+- **Required**: Red badge and form validation
+- **Optional**: Gray badge, can be left empty
+- **Type labels**: Shows expected data type (string, number, boolean)
+
+As you fill in parameters, the SQL preview updates in real-time showing the actual query that will execute.
+
+**Example Custom Tool:**
+
+```toml
+[[tools]]
+name = "get_user_orders"
+source = "prod_pg"
+statement = "SELECT * FROM orders WHERE user_id = $1 AND created_at > $2"
+readonly = true
+
+[[tools.parameters]]
+name = "user_id"
+type = "integer"
+required = true
+description = "User ID to query"
+
+[[tools.parameters]]
+name = "since_date"
+type = "string"
+required = true
+description = "Start date (YYYY-MM-DD)"
+```
+
+The workbench renders this as:
+
+```
+Parameters
+┌─────────────────────────────────────┐
+│ user_id     [number] [required]     │
+│ > 12345                             │
+│                                     │
+│ since_date  [string] [required]     │
+│ > 2024-01-01                        │
+└─────────────────────────────────────┘
+
+SQL Statement
+┌─────────────────────────────────────┐
+│ SELECT * FROM orders                │
+│ WHERE user_id = 12345               │
+│ AND created_at > '2024-01-01'       │
+└─────────────────────────────────────┘
+```
+
+### Results Tabs
+
+Query results appear in a tabbed interface below the editor:
+
+**Tab Information:**
+
+- Timestamp of execution (e.g., "Today 2:34:15 PM")
+- Execution duration (e.g., "145ms")
+- Success/failure indicator (green checkmark or red X)
+- Row count for SELECT queries
+- Affected rows for INSERT/UPDATE/DELETE
+
+**Tab Features:**
+
+- Multiple tabs for query history within the current session
+- Close individual tabs with the X button
+- Switch between tabs to compare results
+- Automatic selection of most recent result
+
+**Result Display:**
+
+For SELECT queries:
+
+```
+┌────┬──────────┬────────────────────┬─────────┐
+│ id │ name     │ email              │ age     │
+├────┼──────────┼────────────────────┼─────────┤
+│ 1  │ John Doe │ john@example.com   │ 30      │
+│ 2  │ Jane     │ jane@example.com   │ 25      │
+│ 3  │ Bob      │ bob@example.com    │ 35      │
+└────┴──────────┴────────────────────┴─────────┘
+
+3 rows returned • 145ms
+```
+
+For INSERT/UPDATE/DELETE:
+
+```
+✓ Query executed successfully
+5 rows affected • 78ms
+```
+
+For errors:
+
+```
+✗ Error: no such table: invalid_table
+
+SQL State: EXECUTION_ERROR
+```
+
+## Common Workflows
+
+### Executing SQL Queries
+
+1. Navigate to a data source in the sidebar
+2. Click the `execute_sql` tool (usually named `execute_sql_<source_id>`)
+3. Type or paste your SQL query in the editor
+4. Press `Cmd+Enter` or click **Run**
+5. View results in the tabbed interface below
+
+**Tips:**
+
+- Use semicolons to separate multiple statements
+- Select specific SQL text and press `Cmd+Enter` to run only that portion
+- Queries are saved in your browser's URL history for easy recall
+- Check the "Read-Only" badge to confirm execution restrictions
+
+### Testing Custom Tools
+
+1. Navigate to your custom tool from the sidebar
+2. Fill in required parameters in the form
+3. Review the SQL preview to verify parameter substitution
+4. Click **Run** to execute
+5. Examine results or error messages
+
+**Parameter Tips:**
+
+- Parameter values are saved in the URL for bookmarking
+- Required parameters must be filled before the Run button activates
+- Number fields validate input automatically
+- Boolean parameters use checkboxes
+
+### Viewing Request Traces
+
+Click **Recent Requests** in the navigation to see execution history:
+
+**Information Displayed:**
+
+- **Time**: When the request was made (relative time and timestamp)
+- **Tool**: Which tool executed (links to tool detail page)
+- **SQL**: The full query (hover for complete text)
+- **Result**: Success/failure with execution time
+- **Client**: Browser name or MCP client (Chrome, Firefox, Claude Desktop, etc.)
+
+**Filtering:**
+
+Click a data source badge to filter requests:
+
+```
+[All (120)] [prod_pg (80)] [staging_mysql (25)] [dev_sqlite (15)]
+```
+
+Only requests for the selected source are displayed. The counter shows the total for each source.
+
+**Details:**
+
+- Hover over truncated SQL to see the full statement
+- Hover over error icons to see complete error messages
+- Click tool names to navigate to the tool detail page
+- Up to 100 requests are stored per data source
+
+### Exploring Database Schema
+
+While dedicated `search_objects` UI is coming soon, you can explore schemas using `execute_sql`:
+
+**PostgreSQL:**
+
+```sql
+-- List all tables
+SELECT tablename 
+FROM pg_tables 
+WHERE schemaname = 'public';
+
+-- Show table columns
+SELECT column_name, data_type, is_nullable
+FROM information_schema.columns
+WHERE table_name = 'users';
+
+-- List indexes
+SELECT indexname, indexdef
+FROM pg_indexes
+WHERE tablename = 'users';
+```
+
+**MySQL/MariaDB:**
+
+```sql
+-- List tables
+SHOW TABLES;
+
+-- Show table structure
+DESCRIBE users;
+
+-- List indexes
+SHOW INDEXES FROM users;
+```
+
+**SQL Server:**
+
+```sql
+-- List tables
+SELECT TABLE_NAME 
+FROM INFORMATION_SCHEMA.TABLES
+WHERE TABLE_TYPE = 'BASE TABLE';
+
+-- Show columns
+SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE
+FROM INFORMATION_SCHEMA.COLUMNS
+WHERE TABLE_NAME = 'users';
+```
+
+**SQLite:**
+
+```sql
+-- List tables
+SELECT name FROM sqlite_master WHERE type='table';
+
+-- Show table schema
+PRAGMA table_info(users);
+
+-- List indexes
+PRAGMA index_list(users);
+```
+
+### Selecting Data Sources
+
+When using multi-database configuration:
+
+1. Click a data source name in the sidebar
+2. View connection details:
+   - Database type (PostgreSQL, MySQL, etc.)
+   - Host and port
+   - Database name
+   - Username
+   - SSH tunnel status (if configured)
+   - Default source indicator
+3. Review available tools for that source
+4. Click a tool to execute queries
+
+**Source Detail View:**
+
+```
+Connection Details
+┌──────────────────────────────────────┐
+│ Database Type: postgres              │
+│ Host: localhost                      │
+│ Port: 5432                           │
+│ Database: production                 │
+│ User: dbuser                         │
+│ Default Source: Yes                  │
+└──────────────────────────────────────┘
+
+SSH Tunnel
+┌──────────────────────────────────────┐
+│ Status: Enabled                      │
+│ SSH Host: bastion.example.com        │
+│ SSH Port: 22                         │
+│ SSH User: deploy                     │
+└──────────────────────────────────────┘
+
+Available Tools
+┌──────────────────────────────────────┐
+│ execute_sql_prod_pg                  │
+│ (1 parameter)                        │
+│ Execute SQL queries on prod_pg       │
+│                                      │
+│ get_active_users 🔒                  │
+│ (0 parameters)                       │
+│ Fetch all active users               │
+└──────────────────────────────────────┘
+```
+
+## Troubleshooting
+
+### Workbench Not Loading
+
+**Symptoms:**
+
+- Browser shows "Cannot connect" or blank page
+- URL `http://localhost:8080` doesn't respond
+
+**Solutions:**
+
+1. Verify DBHub is running with HTTP transport:
+   ```bash
+   npx @bytebase/dbhub@latest --transport http --port 8080 --dsn "..."
+   ```
+
+2. Check the port isn't already in use:
+   ```bash
+   # Try a different port
+   npx @bytebase/dbhub@latest --transport http --port 8081 --dsn "..."
+   ```
+
+3. Look for startup messages in the terminal:
+   ```
+   Workbench at http://localhost:8080/
+   MCP server endpoint at http://localhost:8080/mcp
+   ```
+
+4. Verify firewall settings allow connections to the specified port
+
+### Connection Errors
+
+**Symptoms:**
+
+- "Failed to load data sources" error
+- Empty sidebar with no data sources
+- Tools return database connection errors
+
+**Solutions:**
+
+1. Verify your DSN or TOML configuration is correct:
+   ```bash
+   # Test with demo mode first
+   npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+   ```
+
+2. Check database credentials and network access:
+   ```bash
+   # Test connection directly
+   psql "postgres://user:pass@localhost:5432/dbname"
+   ```
+
+3. For SSH tunnels, verify bastion host accessibility:
+   ```bash
+   ssh user@bastion.example.com
+   ```
+
+4. Review server logs in the terminal for specific error messages
+
+### Query Execution Failures
+
+**Symptoms:**
+
+- Red X indicator in results tab
+- Error messages like "syntax error" or "permission denied"
+- Timeout errors for long-running queries
+
+**Solutions:**
+
+1. Check SQL syntax in the editor (hover over errors for details)
+
+2. Verify you have necessary permissions:
+   ```sql
+   -- PostgreSQL: Check current user
+   SELECT current_user;
+   
+   -- Show grants
+   \du
+   ```
+
+3. For read-only tools, ensure you're only using SELECT/SHOW statements:
+   ```sql
+   -- ✓ Allowed in read-only mode
+   SELECT * FROM users;
+   SHOW TABLES;
+   
+   -- ✗ Blocked in read-only mode
+   INSERT INTO users VALUES (...);
+   UPDATE users SET ...;
+   ```
+
+4. For timeout errors, add LIMIT clauses or optimize queries:
+   ```sql
+   -- Add LIMIT to prevent large result sets
+   SELECT * FROM large_table LIMIT 1000;
+   ```
+
+5. Check the `max_rows` setting in your TOML configuration:
+   ```toml
+   [[tools]]
+   name = "execute_sql"
+   source = "prod_pg"
+   max_rows = 10000  # Increase if needed
+   ```
+
+### Browser Compatibility
+
+**Supported Browsers:**
+
+- Chrome/Edge 90+
+- Firefox 88+
+- Safari 14+
+
+**Known Issues:**
+
+- Older browsers may not support modern JavaScript features
+- CodeMirror SQL editor requires ES2015+ support
+- Local storage required for some features
+
+### URL State Not Persisting
+
+**Symptoms:**
+
+- SQL queries don't save in browser history
+- Parameter values reset on page refresh
+
+**Solutions:**
+
+1. Ensure JavaScript is enabled in your browser
+2. Check that cookies and local storage aren't blocked
+3. URL updates are debounced (300ms delay) - wait briefly before refreshing
+
+## JSON-RPC Request Format
+
+For advanced users or custom integrations, here's the JSON-RPC format the workbench uses:
+
+**Request:**
+
+```bash
+curl -X POST http://localhost:8080/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": "req-123",
+    "method": "tools/call",
+    "params": {
+      "name": "execute_sql",
+      "arguments": {
+        "sql": "SELECT * FROM users LIMIT 5"
+      }
+    }
+  }'
+```
+
+**Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-123",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"success\":true,\"data\":{\"rows\":[{\"id\":1,\"name\":\"John\"}],\"count\":1}}"
+      }
+    ]
+  }
+}
+```
+
+**Error Response:**
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req-123",
+  "error": {
+    "code": -32603,
+    "message": "Database connection failed"
+  }
+}
+```
+
+## Related
+
+- [Workbench Overview](/workbench/overview) - Architecture and key features
+- [Custom Tools](/tools/custom-tools) - Define reusable SQL operations
+- [Multi-Database Configuration](/config/toml) - Connect multiple data sources
+- [HTTP Transport](/config/command-line#transport-options) - Command-line options

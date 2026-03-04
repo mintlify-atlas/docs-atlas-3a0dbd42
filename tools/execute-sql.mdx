@@ -1,0 +1,204 @@
+---
+title: 'execute_sql'
+description: 'Execute SQL queries with transaction support and readonly enforcement'
+icon: 'code'
+---
+
+The `execute_sql` tool allows you to execute SQL statements against your database. It supports multiple statements in a single call (transactions), enforces readonly mode when configured, and limits result sets based on configuration.
+
+## Parameters
+
+<ParamField path="sql" type="string" required>
+  SQL statement(s) to execute. Multiple statements can be separated by semicolons (`;`) for transaction support.
+  
+  **Examples:**
+  - Single query: `SELECT * FROM users WHERE id = 1`
+  - Multiple statements: `BEGIN; UPDATE accounts SET balance = balance - 100 WHERE id = 1; UPDATE accounts SET balance = balance + 100 WHERE id = 2; COMMIT;`
+</ParamField>
+
+<ParamField path="source_id" type="string">
+  Optional database identifier for multi-database configurations. If not provided, uses the default (first) database.
+  
+  **Example:** `"prod_pg"` or `"staging_mysql"`
+</ParamField>
+
+## Response Format
+
+<ResponseField name="rows" type="array">
+  Array of result rows. Each row is an object with column names as keys.
+  
+  ```json
+  [
+    { "id": 1, "name": "Alice", "email": "alice@example.com" },
+    { "id": 2, "name": "Bob", "email": "bob@example.com" }
+  ]
+  ```
+</ResponseField>
+
+<ResponseField name="count" type="number">
+  Number of rows returned or affected by the query.
+</ResponseField>
+
+<ResponseField name="source_id" type="string">
+  The database identifier that was used to execute the query.
+</ResponseField>
+
+## Configuration
+
+The `execute_sql` tool can be configured per-source in your `dbhub.toml` file:
+
+```toml
+[[tools]]
+name = "execute_sql"
+source = "prod_pg"
+readonly = true    # Restrict to read-only operations
+max_rows = 1000    # Limit result set size
+```
+
+### Readonly Mode
+
+When `readonly = true` is configured, the tool only allows the following SQL operations:
+
+- **PostgreSQL:** `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `SHOW`
+- **MySQL/MariaDB:** `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `SHOW`, `DESCRIBE`, `DESC`
+- **SQLite:** `SELECT`, `WITH`, `EXPLAIN`, `ANALYZE`, `PRAGMA`
+- **SQL Server:** `SELECT`, `WITH`, `EXPLAIN`, `SHOWPLAN`
+
+Attempting to execute write operations (INSERT, UPDATE, DELETE, etc.) will result in a `READONLY_VIOLATION` error.
+
+### Max Rows Limiting
+
+The `max_rows` configuration limits the number of rows returned from SELECT queries. This helps prevent:
+- Overwhelming LLM context windows with large result sets
+- Memory exhaustion from unbounded queries
+- Excessive token usage
+
+## SQL Statement Splitting
+
+The tool intelligently splits multiple SQL statements using dialect-aware parsing (via `src/utils/sql-parser.ts`). This ensures that semicolons inside:
+- String literals (`'text with ; semicolon'`)
+- Comments (`-- comment ; here`)
+- Quoted identifiers (`` `table;name` ``)
+- Dollar-quoted blocks (PostgreSQL: `$$text ; here$$`)
+
+...are not treated as statement separators.
+
+## Transaction Support
+
+Multiple statements are executed as a single transaction when separated by semicolons:
+
+```sql
+BEGIN;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+COMMIT;
+```
+
+If any statement fails, the entire transaction is rolled back (database-dependent behavior).
+
+## Examples
+
+### Simple SELECT Query
+
+```json
+{
+  "sql": "SELECT id, name, email FROM users WHERE active = true ORDER BY name LIMIT 10"
+}
+```
+
+**Response:**
+```json
+{
+  "rows": [
+    { "id": 1, "name": "Alice", "email": "alice@example.com" },
+    { "id": 5, "name": "Bob", "email": "bob@example.com" }
+  ],
+  "count": 2,
+  "source_id": "default"
+}
+```
+
+### Multi-Statement Transaction
+
+```json
+{
+  "sql": "BEGIN; UPDATE inventory SET quantity = quantity - 1 WHERE product_id = 42; INSERT INTO orders (product_id, quantity) VALUES (42, 1); COMMIT;"
+}
+```
+
+**Response:**
+```json
+{
+  "rows": [],
+  "count": 1,
+  "source_id": "default"
+}
+```
+
+### Multi-Database Query
+
+```json
+{
+  "sql": "SELECT COUNT(*) as total FROM products",
+  "source_id": "prod_pg"
+}
+```
+
+**Response:**
+```json
+{
+  "rows": [{ "total": 1523 }],
+  "count": 1,
+  "source_id": "prod_pg"
+}
+```
+
+### Complex Query with JOINs
+
+```json
+{
+  "sql": "SELECT u.name, o.order_date, oi.product_name, oi.quantity FROM users u JOIN orders o ON u.id = o.user_id JOIN order_items oi ON o.id = oi.order_id WHERE u.id = 123 ORDER BY o.order_date DESC"
+}
+```
+
+## Error Handling
+
+### READONLY_VIOLATION
+
+Occurs when attempting write operations with `readonly = true` configured:
+
+```json
+{
+  "error": "Read-only mode is enabled. Only the following SQL operations are allowed: SELECT, WITH, EXPLAIN, ANALYZE, SHOW",
+  "code": "READONLY_VIOLATION"
+}
+```
+
+### EXECUTION_ERROR
+
+Occurs when the database returns an error:
+
+```json
+{
+  "error": "relation \"non_existent_table\" does not exist",
+  "code": "EXECUTION_ERROR"
+}
+```
+
+## Implementation Details
+
+- **Source:** `src/tools/execute-sql.ts`
+- **Schema:** Uses Zod schema validation for input parameters
+- **Readonly validation:** `src/utils/allowed-keywords.ts`
+- **SQL parsing:** `src/utils/sql-parser.ts`
+- **Connection management:** Lazy connections via `ConnectorManager.ensureConnected()`
+- **Tool registration:** Per-source via `getToolRegistry()`
+
+## Best Practices
+
+1. **Use readonly mode for production databases** to prevent accidental data modification
+2. **Set appropriate max_rows limits** to avoid overwhelming context windows
+3. **Use transactions** for operations that must be atomic
+4. **Specify source_id explicitly** in multi-database configurations to avoid ambiguity
+5. **Test write operations** in development environments before production
+6. **Use parameterized queries** via custom tools for repeated operations

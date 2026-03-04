@@ -1,0 +1,207 @@
+---
+title: Workbench Overview
+description: Built-in web interface for testing and debugging DBHub MCP tools
+---
+
+The DBHub workbench is a built-in web interface that lets you interact with your database tools directly from your browser. It provides a visual way to execute queries, run custom tools, and view request traces without requiring an MCP client like Claude Desktop or Cursor.
+
+![DBHub Workbench](https://raw.githubusercontent.com/bytebase/dbhub/main/docs/images/workbench/workbench.webp)
+
+## What is the Workbench?
+
+The workbench is a single-page application (SPA) that communicates with DBHub's HTTP transport endpoint via JSON-RPC. When you start DBHub with `--transport http`, it serves both:
+
+- **MCP endpoint**: `/mcp` - The JSON-RPC endpoint for MCP protocol communication
+- **Workbench UI**: Browser-based interface served at the root URL
+
+The workbench provides a complete testing and debugging environment for your database tools, with features including:
+
+- SQL query editor with syntax highlighting
+- Interactive parameter forms for custom tools
+- Tabbed result viewer with execution timing
+- Request trace history across all data sources
+- Multi-database support with source switching
+
+## When to Use the Workbench
+
+**Testing Tools Without an MCP Client**
+
+If you're developing custom tools or need to test database queries before integrating with an AI assistant, the workbench provides immediate feedback without switching to Claude Desktop or another MCP client.
+
+**Debugging Issues**
+
+When troubleshooting query errors or connection issues, the workbench shows detailed error messages and execution traces. The request history view displays all recent operations with timing information and success/failure status.
+
+**Team Demonstrations**
+
+Share your screen to demonstrate database tools to team members who may not have MCP clients installed. The workbench runs in any modern browser and requires no additional setup.
+
+**Multi-Database Management**
+
+When working with multiple databases configured via TOML, the workbench provides easy navigation between sources and their associated tools. Each data source displays its connection details, SSH tunnel configuration, and available MCP tools.
+
+## How to Access
+
+Start DBHub with HTTP transport enabled:
+
+```bash
+npx @bytebase/dbhub@latest --transport http --port 8080 --dsn "postgres://user:pass@localhost:5432/dbname"
+```
+
+Then open your browser to:
+
+```
+http://localhost:8080
+```
+
+For multi-database setups with TOML configuration:
+
+```bash
+npx @bytebase/dbhub@latest --transport http --port 8080 --config dbhub.toml
+```
+
+For quick testing with demo data:
+
+```bash
+npx @bytebase/dbhub@latest --transport http --port 8080 --demo
+```
+
+## Key Features
+
+### Execute SQL Queries
+
+The workbench provides a full-featured SQL editor with:
+
+- Syntax highlighting for SQL statements
+- Multi-line editing with CodeMirror
+- Keyboard shortcuts (`Cmd+Enter` / `Ctrl+Enter` to execute)
+- Support for executing selected text or entire query
+- Automatic URL state persistence (queries saved in browser history)
+
+### Test Custom Tools
+
+Custom tools defined in your `dbhub.toml` appear with interactive parameter forms:
+
+- Type-aware input fields (string, number, boolean)
+- Required vs optional parameter indicators
+- Real-time SQL preview showing parameter substitution
+- Parameter values saved in URL for easy sharing
+
+### View Request Traces
+
+The **Recent Requests** page tracks up to 100 requests per data source, showing:
+
+- Timestamp and execution duration
+- Tool name and source ID
+- Full SQL statement (truncated with hover tooltip)
+- Success/failure status with error details
+- Client user-agent (browser, Claude Desktop, etc.)
+
+Filter by data source to focus on specific databases:
+
+```
+[All (45)] [prod_pg (30)] [staging_mysql (15)]
+```
+
+### Explore Database Schema
+
+While the workbench currently focuses on tool execution, you can use the `search_objects` tool via `execute_sql` to explore your database:
+
+```sql
+-- List all tables
+SELECT name FROM sqlite_master WHERE type='table';
+
+-- Show table structure (PostgreSQL)
+SELECT column_name, data_type 
+FROM information_schema.columns 
+WHERE table_name = 'users';
+```
+
+Direct UI support for `search_objects` is coming soon.
+
+## Architecture
+
+### HTTP Transport
+
+The workbench uses DBHub's **StreamableHTTPServerTransport** implementation, configured for stateless operation:
+
+- **Endpoint**: `POST /mcp` for JSON-RPC requests
+- **No SSE support**: Runs in stateless mode without Server-Sent Events
+- **GET requests disabled**: Returns `405 Method Not Allowed` to indicate SSE is unsupported
+- **Session management**: New transport instance per request for concurrency isolation
+
+See implementation in `src/server.ts:154-217`.
+
+### JSON-RPC Protocol
+
+All tool executions use JSON-RPC 2.0 over HTTP:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "unique-request-id",
+  "method": "tools/call",
+  "params": {
+    "name": "execute_sql_prod_pg",
+    "arguments": {
+      "sql": "SELECT * FROM users LIMIT 10"
+    }
+  }
+}
+```
+
+Response format:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "unique-request-id",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"success\":true,\"data\":{\"rows\":[...],\"count\":10}}"
+      }
+    ]
+  }
+}
+```
+
+### Stateless Mode
+
+Unlike stateful MCP connections (stdio transport), the HTTP workbench creates a new server instance for each request:
+
+```typescript
+// New instance per request prevents ID collisions
+const transport = new StreamableHTTPServerTransport({
+  sessionIdGenerator: undefined,
+  enableJsonResponse: true
+});
+const server = createServer();
+await server.connect(transport);
+```
+
+This ensures complete isolation between concurrent requests from different browser tabs or users.
+
+## Testing
+
+The HTTP transport and JSON-RPC integration are tested in:
+
+```
+src/__tests__/json-rpc-integration.test.ts
+```
+
+These tests verify:
+
+- JSON-RPC protocol compliance
+- Query execution over HTTP
+- Error handling and response formatting
+- Multi-statement execution
+- SQLite-specific features (PRAGMA, transactions)
+
+## Related
+
+- [Workbench Usage Guide](/workbench/usage) - Detailed UI walkthrough and workflows
+- [HTTP Transport Configuration](/config/command-line#transport-options) - Command-line options
+- [Multi-Database Setup](/config/toml) - TOML configuration for multiple data sources
+- [Custom Tools](/tools/custom-tools) - Define reusable SQL operations
