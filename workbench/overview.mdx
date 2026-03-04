@@ -105,19 +105,25 @@ Filter by data source to focus on specific databases:
 
 ### Explore Database Schema
 
-While the workbench currently focuses on tool execution, you can use the `search_objects` tool via `execute_sql` to explore your database:
+You can explore your database schema using SQL queries in the execute_sql tool:
 
 ```sql
--- List all tables
+-- List all tables (SQLite)
 SELECT name FROM sqlite_master WHERE type='table';
+
+-- List all tables (PostgreSQL)
+SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';
 
 -- Show table structure (PostgreSQL)
 SELECT column_name, data_type 
 FROM information_schema.columns 
 WHERE table_name = 'users';
+
+-- Show table structure (MySQL)
+DESCRIBE users;
 ```
 
-Direct UI support for `search_objects` is coming soon.
+For token-efficient schema exploration, use the `search_objects` tool which provides progressive disclosure with detail levels.
 
 ## Architecture
 
